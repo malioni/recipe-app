@@ -1,3 +1,5 @@
+/// network library meant to handle everything related to the connection, including
+/// the connection itself and the response to endpoints
 use std::{
     io::{self, prelude::*, BufReader},
     net::TcpStream,
@@ -5,6 +7,24 @@ use std::{
     path::Path,
 };
 
+/// handle the connection received, read the first line and return appropriate response
+///
+/// # Arguments
+///
+/// * `stream` - object representing incoming connection to the server
+///
+/// # Returns
+/// 
+/// Returns `Ok()` if the stream request was identified, recognized and responded to
+/// Returns `Err(io:Error)` if there's an issue with the request or the response
+///
+/// # Errors
+///
+/// This function will return an error if:
+/// - The first line of the incoming request cannot be read
+/// - The html file needed for response cannot be found
+/// - There's an issue with sending the response
+///
 pub fn handle_connection(mut stream: TcpStream) -> io::Result<()> {
     let buf_reader = BufReader::new(&stream);
     let mut lines = buf_reader.lines();
@@ -44,7 +64,32 @@ pub fn handle_connection(mut stream: TcpStream) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        thread,
+        net::{TcpListener, TcpStream},
+    };
 
+    #[test]
+    fn test_handle_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
 
+        // Spawn server thread
+        thread::spawn(move || {
+            if let Ok((stream, _)) = listener.accept() {
+                handle_connection(stream);
+            }
+        });
 
-        
+        // Connect as client
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream.write_all(b"GET / HTTP/1.1\r\n\r\n").unwrap();
+
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        assert!(response.contains("200 OK"));
+    }
+}
