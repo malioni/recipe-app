@@ -4,7 +4,7 @@ Rust Web App for maintaining recipes. The goal of the application is to host rec
 ## To-do List
 List of tasks for the project. Feature is implemented when it is merged into the main branch.
 ### Backend
-- [ ] Create basic server structure: web app can be accessed from the browser
+- [x] Create basic server structure: web app can be accessed from the browser
 - [ ] Create an initial storage solution
 - [ ] Create more robust storage solution
 - [ ] Support for managing recipes - adding, modifying, deleting
