@@ -13,7 +13,7 @@ List of tasks for the project. Feature is implemented when it is merged into the
 - [ ] Creating grocery list for recipes planned within certain time period
 
 ### Frontend
-- [ ] Create recipe page, diplaying recipe, and ingredients
+- [x] Create recipe page, diplaying recipe, and ingredients
 - [ ] Create calendar page, displaying calendar and recipes planned in certain days
 - [ ] Create grocery list
 
