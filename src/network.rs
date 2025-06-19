@@ -39,11 +39,32 @@ pub fn handle_connection(mut stream: TcpStream) -> io::Result<()> {
             return Ok(());
         }};
 
-    let (status_line, filename) = match &request_line[..] {
-        "GET / HTTP/1.1" => ("HTTP/1.1 200 OK", "recipe-page.html"),
-        _ => ("HTTP/1.1 404 NOT FOUND", "404.html"),
+    let response = match &request_line[..] {
+        "GET / HTTP/1.1" => match html_file_response("HTTP/1.1 200 OK", "recipe-page.html") {
+            Ok(response) => response,
+            Err(e) => {
+                eprintln!("Error while requesting html file response: {e:?}");
+                return Err(e);
+            }
+        },
+        _ => match html_file_response("HTTP/1.1 404 NOT FOUND", "404.html") {
+            Ok(response) => response,
+            Err(e) => {
+                eprintln!("Error while requesting html file response: {e:?}");
+                return Err(e);
+            }
+        },
         };
 
+    if let Err(e) = stream.write_all(response.as_bytes()) {
+        eprintln!("Error while sending the response: {e:?}");
+        return Err(e);
+    };
+
+    Ok(())
+}
+
+fn html_file_response(status_line: &str, filename: &str) -> io::Result<String> {
     let directory = "html";
     let path = Path::new(directory).join(filename);
     let contents = match fs::read_to_string(&path) {
@@ -52,16 +73,9 @@ pub fn handle_connection(mut stream: TcpStream) -> io::Result<()> {
             eprintln!("Error while opening an html file at location {}: {}", path.display(), e);
             return Err(e);
         }};
+
     let length = contents.len();
-
-    let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{contents}");
-
-    if let Err(e) = stream.write_all(response.as_bytes()) {
-        eprintln!("Error while sending the response: {e:?}");
-        return Err(e);
-    };
-
-    Ok(())
+    Ok(format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{contents}"))
 }
 
 #[cfg(test)]
@@ -80,7 +94,7 @@ mod tests {
         // Spawn server thread
         thread::spawn(move || {
             if let Ok((stream, _)) = listener.accept() {
-                handle_connection(stream);
+                let _ = handle_connection(stream);
             }
         });
 
