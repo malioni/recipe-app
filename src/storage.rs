@@ -2,23 +2,14 @@
 use std::{
     fs::File,
     io::{self, Write, Read},
+    path::PathBuf,
 };
-use serde::{Deserialize, Serialize};
-
-#[derive(Serialize, Deserialize, Debug)]
-struct Recipe {
-    name: String,
-    picture: String,
-    ingredients: Vec<String>,
-    instructions: Vec<String>,
-}
-
-pub fn write_to_file(filename: &str, content: &str) -> io::Result<()> {
+pub fn write_to_file(filename: &PathBuf, content: &str) -> io::Result<()> {
     // Create or open the file for writing
     let mut file = match File::create(filename) {
         Ok(file) => file,
         Err(e) => {
-            eprintln!("Error creating file {}: {}", filename, e);
+            eprintln!("Error creating file {}: {}", filename.display(), e);
             return Err(e);
         }
     };
@@ -27,18 +18,18 @@ pub fn write_to_file(filename: &str, content: &str) -> io::Result<()> {
     match file.write_all(content.as_bytes()) {
         Ok(_) => Ok(()),
         Err(e) => {
-            eprintln!("Error writing to file {}: {}", filename, e);
+            eprintln!("Error writing to file {}: {}", filename.display(), e);
             Err(e)
         }
     }
 }
 
-pub fn read_from_file(filename: &str) -> io::Result<String> {
+pub fn read_from_file(filename: &PathBuf) -> io::Result<String> {
     // Open the file for reading
     let mut file = match File::open(filename) {
         Ok(file) => file,
         Err(e) => {
-            eprintln!("Error opening file for reading {}: {}", filename, e);
+            eprintln!("Error opening file for reading {}: {}", filename.display(), e);
             return Err(e);
         }
     };
@@ -48,7 +39,7 @@ pub fn read_from_file(filename: &str) -> io::Result<String> {
     match file.read_to_string(&mut content) {
         Ok(_) => Ok(content),
         Err(e) => {
-            eprintln!("Error reading from file {}: {}", filename, e);
+            eprintln!("Error reading from file {}: {}", filename.display(), e);
             Err(e)
         }
     }

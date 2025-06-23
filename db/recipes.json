@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Thin Pancakes",
+    "picture": "dish.jpg",
+    "ingredients": [
+      { "name": "eggs", "quantity": 3, "unit": "" },
+      { "name": "sugar", "quantity": 1, "unit": "Tbs" },
+      { "name": "salt", "quantity": 1, "unit": "tsp" },
+      { "name": "flour", "quantity": 1, "unit": "cup" },
+      { "name": "milk", "quantity": 1, "unit": "1½ cup" }
+    ],
+    "instructions": [
+      "In a large bowl mix the eggs, salt and sugar.",
+      "Add flour and milk, mix together until the batter is smooth.",
+      "Heat up a frying pan on a medium-high heat.",
+      "Place butter (or oil) on the pan, pour on batter and spread it to cover the whole pan.",
+      "Cook until the bottom turns light brown, flip over and repeat on the other side.",
+      "Serve warm and enjoy!"
+    ]
+  }
+]
+

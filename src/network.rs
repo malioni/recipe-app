@@ -6,6 +6,7 @@ use std::{
     fs,
     path::Path,
 };
+use crate::manager;
 
 /// handle the connection received, read the first line and return appropriate response
 ///
@@ -55,6 +56,11 @@ pub fn handle_connection(mut stream: TcpStream) -> io::Result<()> {
             }
         },
         };
+
+    match manager::get_recipe_by_id(0) {
+        Some(recipe) => println!("Recipe found: {recipe}"),
+        None => println!("No recipe found with the given ID."),
+    };
 
     if let Err(e) = stream.write_all(response.as_bytes()) {
         eprintln!("Error while sending the response: {e:?}");
