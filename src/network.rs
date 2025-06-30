@@ -39,6 +39,7 @@ pub fn handle_connection(mut stream: TcpStream) -> io::Result<()> {
             eprintln!("No data received from client.");
             return Ok(());
         }};
+    println!("Received request: {request_line}");
 
     let response = match &request_line[..] {
         "GET / HTTP/1.1" => match html_file_response("HTTP/1.1 200 OK", "recipe-page.html") {
@@ -48,6 +49,19 @@ pub fn handle_connection(mut stream: TcpStream) -> io::Result<()> {
                 return Err(e);
             }
         },
+        "GET /recipes/0 HTTP/1.1" => match manager::get_recipe_by_id(0) {
+            Some(recipe) => {
+                let length = recipe.len();
+                format!("HTTP/1.1 200 OK\r\nContent-Length: {length}\r\n\r\n{recipe}")
+            }
+            None => match html_file_response("HTTP/1.1 404 NOT FOUND", "404.html") {
+                Ok(response) => response,
+                Err(e) => {
+                    eprintln!("Error while requesting html file response: {e:?}");
+                    return Err(e);
+                }
+            },
+        },
         _ => match html_file_response("HTTP/1.1 404 NOT FOUND", "404.html") {
             Ok(response) => response,
             Err(e) => {
@@ -56,11 +70,6 @@ pub fn handle_connection(mut stream: TcpStream) -> io::Result<()> {
             }
         },
         };
-
-    match manager::get_recipe_by_id(0) {
-        Some(recipe) => println!("Recipe found: {recipe}"),
-        None => println!("No recipe found with the given ID."),
-    };
 
     if let Err(e) = stream.write_all(response.as_bytes()) {
         eprintln!("Error while sending the response: {e:?}");

@@ -8,31 +8,82 @@
 </head>
 <body class="bg-light py-4">
   <div class="container bg-white p-4 rounded shadow-sm">
-    <h1 class="text-center mb-4">Thin Pancakes</h1>
-    <img src="dish.jpg" alt="Thin Pancakes" class="img-fluid rounded mb-4" />
+    <h1 id="recipe-name" class="text-center mb-4">Loading...</h1>
+    <img id="recipe-image" src="" alt="" class="img-fluid rounded mb-4" />
 
     <div class="mb-4">
       <h2 class="h4 border-bottom pb-2">Ingredients</h2>
-      <ul>
-        <li>3 eggs</li>
-        <li>1 Tbs sugar</li>
-        <li>1 tsp salt</li>
-        <li>1 cup flour</li>
-        <li>1&frac12 cup milk</li>
-      </ul>
+      <ul id="ingredients-list"></ul>
     </div>
 
     <div>
       <h2 class="h4 border-bottom pb-2">Steps</h2>
-      <ol>
-        <li>In a large bowl mix the eggs, salt and sugar.</li>
-        <li>Add flour and milk, mix together until the batter is smooth.</li>
-        <li>Heat up a frying pan on a medium-high heat.</li>
-        <li>Place butter (or oil) on the pan, pour on batter and spread it to cover the whole pan.</li>
-        <li>Cook until the bottom turns light brown, flip over and repeat on the other side.</li>
-        <li>Serve warm and enjoy!</li>
-      </ol>
+      <ol id="instructions-list"></ol>
     </div>
+
+    <!-- Temporary option to load another recipe -->
+    <div class="mt-4">
+		<input type="number" id="recipe-id-input" placeholder="Enter recipe ID" />
+		<button onclick="loadRecipe()">Load Recipe</button>
+	</div>
   </div>
+
+  <script>
+    async function fetchRecipeById(recipeId) {
+	  try {
+	    const response = await fetch(`/recipes/${recipeId}`);
+		if (!response.ok) throw new Error("Recipe not found");
+		return await response.json();
+	  } catch (error) {
+	    console.error("Error fetching recipe:", error);
+	    return null;
+	  }
+	}
+
+    function renderRecipe(recipe) {
+	  if (!recipe) {
+	    document.getElementById("recipe-name").textContent = "Error loading recipe";
+		document.getElementById("recipe-image").style.display = "none";
+		return;
+	  }
+
+	  document.getElementById("recipe-name").textContent = recipe.name;
+
+	  <!-- const img = document.getElementById("recipe-image"); -->
+	  <!-- img.src = recipe.picture; -->
+	  <!-- img.alt = recipe.name; -->
+	  <!-- img.style.display = "block"; -->
+
+      const ingredientsList = document.getElementById("ingredients-list");
+	  ingredientsList.innerHTML = "";
+	  recipe.ingredients.forEach(ing => {
+	    const li = document.createElement("li");
+		li.textContent = `${ing.quantity} ${ing.unit} ${ing.name}`;
+		ingredientsList.appendChild(li);
+	  });
+
+      const instructionsList = document.getElementById("instructions-list");
+	  instructionsList.innerHTML = "";
+	  recipe.instructions.forEach(step => {
+	    const li = document.createElement("li");
+		li.textContent = step;
+		instructionsList.appendChild(li);
+	  });
+	}
+
+    async function loadRecipe() {
+	  const input = document.getElementById("recipe-id-input");
+	  const recipeId = input.value || 0;
+	  const recipe = await fetchRecipeById(recipeId);
+	  renderRecipe(recipe);
+	}
+
+    // Load the default recipe on page load
+	window.addEventListener("DOMContentLoaded", () => {
+	  document.getElementById("recipe-id-input").value = 0;
+	  loadRecipe();
+	});
+  </script>
+
 </body>
 </html>
