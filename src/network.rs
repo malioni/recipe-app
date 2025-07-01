@@ -121,4 +121,26 @@ mod tests {
         stream.read_to_string(&mut response).unwrap();
         assert!(response.contains("200 OK"));
     }
+
+    #[test]
+    fn test_recipe_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        // Spawn server thread
+        thread::spawn(move || {
+            if let Ok((stream, _)) = listener.accept() {
+                let _ = handle_connection(stream);
+            }
+        });
+
+        // Connect as client
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream.write_all(b"GET /recipes/0 HTTP/1.1\r\n\r\n").unwrap();
+
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        assert!(response.contains("200 OK"));
+    }
+
 }

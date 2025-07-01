@@ -17,6 +17,18 @@ struct Recipe {
     instructions: Vec<String>,
 }
 
+/// Retrieves a recipe by its ID from the database.
+///
+/// # Arguments
+///
+/// * `id` - The ID of the recipe as stored in the database. Used to retrieve the next or the
+/// previous recipe.
+///
+/// # Returns
+/// 
+/// Returns `Some(String)` if the recipe is found and serialized to a JSON string.
+/// Returns `None` if the recipe was not found or if there was an error during the process.
+///
 pub fn get_recipe_by_id(id: u32) -> Option<String> {
     // Read the recipes from a file
     let directory = "db";
@@ -36,3 +48,21 @@ pub fn get_recipe_by_id(id: u32) -> Option<String> {
             serde_json::to_string(&recipe).ok()
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_recipe_by_id() {
+        // Test with a valid ID
+        let recipe = get_recipe_by_id(0);
+        assert!(recipe.is_some(), "Recipe should be found for ID 0");
+
+        // Test with an invalid ID
+        let recipe = get_recipe_by_id(999999);
+        assert!(recipe.is_none(), "Recipe should not be found for ID 999999");
+    }
+}
+
+
