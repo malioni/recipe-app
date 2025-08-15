@@ -1,16 +1,21 @@
 use recipe_app::network;
-use std::net::TcpListener;
+use axum::{
+    routing::get,
+    Router,
+};
+use std::net::SocketAddr;
+use tokio::net::TcpListener;
 
-fn main() {
-    let ip = "127.0.0.1:7878";
-    let listener = TcpListener::bind(ip).unwrap();
+#[tokio::main]
+async fn main() {
+    let app = Router::new()
+        .route("/", get(network::handle_index))
+        .route("/recipes/:id", get(network::handle_recipe));
 
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) =>  { if let Err(e) = network::handle_connection(stream) {
-                eprintln!("Issue with the connection: {e:?}")
-            }}
-            Err(e) => eprintln!("Failed to accept connection: {e:?}"),
-        };
-    }
+    let addr = SocketAddr::from(([127, 0, 0, 1], 7878));
+    let listener = TcpListener::bind(addr).await.unwrap();
+    println!("Listening on {addr}");
+    axum::serve(listener, app)
+        .await
+        .unwrap();
 }

@@ -1,146 +1,58 @@
-/// network library meant to handle everything related to the connection, including
-/// the connection itself and the response to endpoints
-use std::{
-    io::{self, prelude::*, BufReader},
-    net::TcpStream,
-    fs,
-    path::Path,
+use axum::{
+   response::{IntoResponse, Html},
+   extract::Path,
+   Json
 };
 use crate::manager;
 
-/// handle the connection received, read the first line and return appropriate response
-///
-/// # Arguments
-///
-/// * `stream` - object representing incoming connection to the server
-///
-/// # Returns
-/// 
-/// Returns `Ok()` if the stream request was identified, recognized and responded to
-/// Returns `Err(io:Error)` if there's an issue with the request or the response
-///
-/// # Errors
-///
-/// This function will return an error if:
-/// - The first line of the incoming request cannot be read
-/// - The html file needed for response cannot be found
-/// - There's an issue with sending the response
-///
-pub fn handle_connection(mut stream: TcpStream) -> io::Result<()> {
-    let buf_reader = BufReader::new(&stream);
-    let mut lines = buf_reader.lines();
-    let request_line = match lines.next() {
-        Some(Ok(line)) => line,
-        Some(Err(e)) => {
-            eprintln!("Error reading first line: {e:?}");
-            return Err(e);
-        }
-        None => {
-            eprintln!("No data received from client.");
-            return Ok(());
-        }};
-    println!("Received request: {request_line}");
-
-    let response = match &request_line[..] {
-        "GET / HTTP/1.1" => match html_file_response("HTTP/1.1 200 OK", "recipe-page.html") {
-            Ok(response) => response,
-            Err(e) => {
-                eprintln!("Error while requesting html file response: {e:?}");
-                return Err(e);
-            }
-        },
-        "GET /recipes/0 HTTP/1.1" => match manager::get_recipe_by_id(0) {
-            Some(recipe) => {
-                let length = recipe.len();
-                format!("HTTP/1.1 200 OK\r\nContent-Length: {length}\r\n\r\n{recipe}")
-            }
-            None => match html_file_response("HTTP/1.1 404 NOT FOUND", "404.html") {
-                Ok(response) => response,
-                Err(e) => {
-                    eprintln!("Error while requesting html file response: {e:?}");
-                    return Err(e);
-                }
-            },
-        },
-        _ => match html_file_response("HTTP/1.1 404 NOT FOUND", "404.html") {
-            Ok(response) => response,
-            Err(e) => {
-                eprintln!("Error while requesting html file response: {e:?}");
-                return Err(e);
-            }
-        },
-        };
-
-    if let Err(e) = stream.write_all(response.as_bytes()) {
-        eprintln!("Error while sending the response: {e:?}");
-        return Err(e);
-    };
-
-    Ok(())
+pub async fn handle_index() -> impl IntoResponse {
+    // Serve the html page
+    Html(std::fs::read_to_string("html/recipe-page.html").unwrap_or_else(|_| "<h1>Error</h1>".to_string()))
 }
 
-fn html_file_response(status_line: &str, filename: &str) -> io::Result<String> {
-    let directory = "html";
-    let path = Path::new(directory).join(filename);
-    let contents = match fs::read_to_string(&path) {
-        Ok(contents) => contents,
-        Err(e) => {
-            eprintln!("Error while opening an html file at location {}: {}", path.display(), e);
-            return Err(e);
-        }};
-
-    let length = contents.len();
-    Ok(format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{contents}"))
+pub async fn handle_recipe(Path(id): Path<u32>) -> Json<manager::Recipe> {
+    Json(manager::get_recipe_by_id(id).unwrap_or(manager::Recipe::default()))
 }
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        thread,
-        net::{TcpListener, TcpStream},
-    };
+    use http_body_util::BodyExt;
+    use std::fs;
+    use serde_json::from_slice;
 
-    #[test]
-    fn test_handle_connection() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
+    #[tokio::test]
+    async fn test_handle_index() {
+        // Arrange: read the expected file contents
+        let expected_html = fs::read_to_string("html/recipe-page.html").unwrap();
 
-        // Spawn server thread
-        thread::spawn(move || {
-            if let Ok((stream, _)) = listener.accept() {
-                let _ = handle_connection(stream);
-            }
-        });
+        // Act: call your handler
+        let response = handle_index().await.into_response();
 
-        // Connect as client
-        let mut stream = TcpStream::connect(addr).unwrap();
-        stream.write_all(b"GET / HTTP/1.1\r\n\r\n").unwrap();
+        // Assert: extract body into a string
+        let body_bytes = response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes();
+        let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
 
-        let mut response = String::new();
-        stream.read_to_string(&mut response).unwrap();
-        assert!(response.contains("200 OK"));
+        assert_eq!(body_str, expected_html);
     }
 
-    #[test]
-    fn test_recipe_connection() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
+    #[tokio::test]
+    async fn test_handle_recipe_with_id_0() {
+        // Act: call the handler directly
+        let response = handle_recipe(Path(0)).await.into_response();
 
-        // Spawn server thread
-        thread::spawn(move || {
-            if let Ok((stream, _)) = listener.accept() {
-                let _ = handle_connection(stream);
-            }
-        });
+        // Extract body
+        let body_bytes = response.into_body().collect().await.unwrap().to_bytes();
 
-        // Connect as client
-        let mut stream = TcpStream::connect(addr).unwrap();
-        stream.write_all(b"GET /recipes/0 HTTP/1.1\r\n\r\n").unwrap();
+        let recipe: manager::Recipe = from_slice(&body_bytes).unwrap();
 
-        let mut response = String::new();
-        stream.read_to_string(&mut response).unwrap();
-        assert!(response.contains("200 OK"));
+        // Assert: a recipe is returned
+        assert_ne!(recipe, manager::Recipe::default());
     }
-
 }

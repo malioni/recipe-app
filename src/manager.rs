@@ -2,15 +2,15 @@ use crate::storage::read_from_file;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 struct Ingredient {
     name: String,
     quantity: u32,
     unit: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct Recipe {
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct Recipe {
     name: String,
     picture: String,
     ingredients: Vec<Ingredient>,
@@ -29,7 +29,7 @@ struct Recipe {
 /// Returns `Some(String)` if the recipe is found and serialized to a JSON string.
 /// Returns `None` if the recipe was not found or if there was an error during the process.
 ///
-pub fn get_recipe_by_id(id: u32) -> Option<String> {
+pub fn get_recipe_by_id(id: u32) -> Option<Recipe> {
     // Read the recipes from a file
     let directory = "db";
     let filename = "recipes.json";
@@ -43,9 +43,6 @@ pub fn get_recipe_by_id(id: u32) -> Option<String> {
         .and_then(|recipes| {
             // Find the recipe with the given ID
             recipes.get(id as usize).cloned()
-        }).and_then(|recipe| {
-            // Serialize the found recipe back to a JSON string
-            serde_json::to_string(&recipe).ok()
         })
 }
 
