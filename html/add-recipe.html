@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Add New Recipe</title>
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+    />
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css"
+      rel="stylesheet"
+    />
+  </head>
+  <body class="bg-light py-4">
+    <div class="container bg-white p-4 rounded shadow-sm">
+      <!-- Back link (edit mode only) -->
+      <a
+        id="back-link"
+        href="/"
+        class="text-decoration-none text-muted d-inline-flex align-items-center gap-1 mb-3"
+        style="display: none !important"
+      >
+        <i class="bi bi-arrow-left"></i> Back to recipe
+      </a>
+
+      <h1 id="page-title" class="mb-4">Add a New Recipe</h1>
+
+      <!-- Recipe Title -->
+      <div class="mb-3">
+        <label for="recipe-title" class="form-label">Recipe Title</label>
+        <input
+          type="text"
+          class="form-control"
+          id="recipe-title"
+          placeholder="Enter recipe name"
+          required
+        />
+      </div>
+
+      <!-- Ingredients -->
+      <div class="mb-4">
+        <h2 class="h5">Ingredients</h2>
+        <div id="ingredients-list"></div>
+        <button
+          type="button"
+          class="btn btn-sm btn-outline-primary mt-2"
+          onclick="addIngredient()"
+        >
+          + Add Ingredient
+        </button>
+      </div>
+
+      <!-- Instructions -->
+      <div class="mb-4">
+        <h2 class="h5">Steps</h2>
+        <div id="steps-list"></div>
+        <button
+          type="button"
+          class="btn btn-sm btn-outline-primary mt-2"
+          onclick="addStep()"
+        >
+          + Add Step
+        </button>
+      </div>
+
+      <!-- Submit -->
+      <button class="btn btn-success" onclick="submitRecipe()">
+        Save Recipe
+      </button>
+    </div>
+
+    <script>
+      // ----------------------------------------------------------------
+      // State — set on DOMContentLoaded
+      // ----------------------------------------------------------------
+      let editingId = null; // null = add mode, number = edit mode
+
+      // ----------------------------------------------------------------
+      // Form helpers
+      // ----------------------------------------------------------------
+      function addIngredient(item = "", qty = "", unit = "") {
+        const container = document.getElementById("ingredients-list");
+        const row = document.createElement("div");
+        row.className = "row g-2 mb-2 align-items-center";
+        row.innerHTML = `
+        <div class="col">
+          <input type="text" class="form-control" placeholder="Item" value="${item}">
+        </div>
+        <div class="col-3">
+          <input type="number" step="any" class="form-control" placeholder="Qty" value="${qty}">
+        </div>
+        <div class="col-3">
+          <input type="text" class="form-control" placeholder="Unit" value="${unit}">
+        </div>
+        <div class="col-auto">
+          <button type="button" class="btn btn-sm btn-danger" onclick="this.parentElement.parentElement.remove()">x</button>
+        </div>
+      `;
+        container.appendChild(row);
+      }
+
+      function addStep(text = "") {
+        const container = document.getElementById("steps-list");
+        const row = document.createElement("div");
+        row.className = "input-group mb-2";
+        row.innerHTML = `
+        <input type="text" class="form-control" placeholder="Step description" value="${text}">
+        <button type="button" class="btn btn-danger" onclick="this.parentElement.remove()">x</button>
+      `;
+        container.appendChild(row);
+      }
+
+      // ----------------------------------------------------------------
+      // Pre-populate form from an existing recipe (edit mode)
+      // ----------------------------------------------------------------
+      function populateForm(recipe) {
+        document.getElementById("recipe-title").value = recipe.name;
+
+        recipe.ingredients.forEach((ing) =>
+          addIngredient(ing.name, ing.quantity, ing.unit)
+        );
+        recipe.instructions.forEach((step) => addStep(step));
+      }
+
+      // ----------------------------------------------------------------
+      // Submit — POST for add, PUT for edit
+      // ----------------------------------------------------------------
+      async function submitRecipe() {
+        const title = document.getElementById("recipe-title").value.trim();
+        if (!title) {
+          alert("Please enter a recipe title.");
+          return;
+        }
+
+        const ingredients = Array.from(
+          document.querySelectorAll("#ingredients-list .row")
+        ).map((row) => {
+          const inputs = row.querySelectorAll("input");
+          return {
+            name: inputs[0].value,
+            quantity: parseFloat(inputs[1].value) || 0,
+            unit: inputs[2].value,
+          };
+        });
+
+        const instructions = Array.from(
+          document.querySelectorAll("#steps-list input")
+        )
+          .map((input) => input.value)
+          .filter((v) => v.trim() !== "");
+
+        const recipe = {
+          name: title,
+          picture: "",
+          ingredients,
+          instructions,
+        };
+
+        const isEditing = editingId !== null;
+        const url = isEditing ? `/recipes/${editingId}` : "/recipes";
+        const method = isEditing ? "PUT" : "POST";
+
+        try {
+          const response = await fetch(url, {
+            method,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(recipe),
+          });
+
+          if (response.ok) {
+            // Return to the recipe view if editing, or the list if adding
+            window.location.href = isEditing ? `/#/recipes/${editingId}` : "/";
+          } else {
+            alert(`Failed to ${isEditing ? "update" : "add"} recipe`);
+          }
+        } catch (err) {
+          console.error("Error submitting recipe:", err);
+          alert("Error submitting recipe");
+        }
+      }
+
+      // ----------------------------------------------------------------
+      // Initialise — detect edit mode from ?id= query param
+      // ----------------------------------------------------------------
+      window.addEventListener("DOMContentLoaded", async () => {
+        const params = new URLSearchParams(window.location.search);
+        const idParam = params.get("id");
+
+        if (idParam !== null) {
+          // Edit mode
+          editingId = parseInt(idParam, 10);
+          document.getElementById("page-title").textContent = "Edit Recipe";
+          document.title = "Edit Recipe";
+
+          // Show back link pointing to this recipe's view
+          const backLink = document.getElementById("back-link");
+          backLink.href = `/#/recipes/${editingId}`;
+          backLink.style.removeProperty("display");
+
+          // Fetch and populate
+          try {
+            const response = await fetch(`/recipes/${editingId}`);
+            if (!response.ok) throw new Error("Not found");
+            const recipe = await response.json();
+            populateForm(recipe);
+          } catch (err) {
+            alert("Could not load recipe for editing.");
+            window.location.href = "/";
+          }
+        } else {
+          // Add mode — start with one blank row each
+          addIngredient();
+          addStep();
+        }
+      });
+    </script>
+  </body>
+</html>
