@@ -21,3 +21,11 @@ target/
 /target
 
 .DS_Store
+
+# SQLite database files
+*.db
+*.db-wal
+*.db-shm
+
+# Environment variables
+.env
