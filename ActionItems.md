@@ -43,7 +43,7 @@ This is a multi-user recipe and meal planning application, intended to run on a 
 
 ---
 
-### 2. [ ] Add Authentication
+### 2. [x] Add Authentication
 
 **Why now:** Auth is the most foundational "gets harder later" item once multi-user is the goal. One middleware added now protects all current and future routes automatically. Added after more routes exist, every handler becomes a risk of being missed.
 
@@ -57,7 +57,7 @@ This is a multi-user recipe and meal planning application, intended to run on a 
 
 ---
 
-### 3. [ ] Add Request Body Size Limit Middleware
+### 3. [x] Add Request Body Size Limit Middleware
 
 **Why now:** Without this, a single POST request with a multi-MB payload is buffered entirely in memory before any handler or validation runs. One line of middleware protects all current and future routes. Should be added at the same time as auth since both are framework-level protections.
 
@@ -68,7 +68,7 @@ This is a multi-user recipe and meal planning application, intended to run on a 
 
 ---
 
-### 4. [ ] Fix XSS Vulnerabilities
+### 4. [x] Fix XSS Vulnerabilities
 
 **Why now:** Low risk on localhost, real attack surface once the app moves to a home network or the web.
 
@@ -80,7 +80,7 @@ This is a multi-user recipe and meal planning application, intended to run on a 
 
 ---
 
-### 5. [ ] Add `tracing` for Structured Logging
+### 5. [x] Add `tracing` for Structured Logging
 
 **Why now:** `eprintln!` disappears in any real deployment. Axum emits `tracing` spans natively so this is low effort for high debuggability gain. Establish the pattern before auth and more routes are added — structured logs are also important for detecting resource abuse (e.g. identifying which user is creating excessive records).
 
@@ -93,7 +93,7 @@ This is a multi-user recipe and meal planning application, intended to run on a 
 
 ---
 
-### 6. [ ] Declare `pendingDate` / `pendingSlot` as Proper Variables in `calendar.html`
+### 6. [x] Declare `pendingDate` / `pendingSlot` as Proper Variables in `calendar.html`
 
 **Why now:** These are currently implicit globals. Breaks in strict mode and will cause silent bugs if a bundler or linter is ever added.
 
@@ -103,7 +103,7 @@ This is a multi-user recipe and meal planning application, intended to run on a 
 
 ---
 
-### 7. [ ] Fix Timezone Bug in `toISO` (`calendar.html`)
+### 7. [x] Fix Timezone Bug in `toISO` (`calendar.html`)
 
 **Why now:** Correctness bug that affects all users west of UTC. Can corrupt stored dates if not fixed before real data accumulates.
 

@@ -65,19 +65,10 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool, String> {
 
 /// Represents an authenticated user extracted from the session.
 ///
-/// Add this as a parameter to any handler that requires authentication:
-///
-/// ```rust
-/// pub async fn handle_something(
-///     auth: AuthUser,
-///     State(pool): State<SqlitePool>,
-/// ) -> impl IntoResponse {
-///     // auth.user_id is the authenticated user's ID
-/// }
-/// ```
-///
-/// If the session is missing or expired, the extractor returns a redirect
-/// to `/login` automatically — the handler code never runs.
+/// Add this as a parameter to any handler that requires authentication.
+/// The extractor reads the session and returns the authenticated user's ID
+/// via `auth.user_id`. If the session is missing or expired, the extractor
+/// returns a redirect to `/login` automatically — the handler code never runs.
 pub struct AuthUser {
     pub user_id: i64,
 }

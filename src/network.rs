@@ -46,16 +46,30 @@ pub async fn handle_login(
     // to avoid leaking which usernames exist.
     let user = match manager::get_user_by_username(&pool, &form.username).await {
         Ok(Some(u)) => u,
-        _ => return Redirect::to("/login?error=1").into_response(),
+        Ok(None) => {
+            tracing::warn!("Login attempt for unknown username: {}", form.username);
+            return Redirect::to("/login?error=1").into_response();
+        }
+        Err(e) => {
+            tracing::error!("Database error during login: {e}");
+            return Redirect::to("/login?error=1").into_response();
+        }
     };
 
     match auth::verify_password(&form.password, &user.password_hash) {
         Ok(true) => {}
-        _ => return Redirect::to("/login?error=1").into_response(),
+        Ok(false) => {
+            tracing::warn!("Failed login attempt for username: {}", form.username);
+            return Redirect::to("/login?error=1").into_response();
+        }
+        Err(e) => {
+            tracing::error!("Password verification error: {e}");
+            return Redirect::to("/login?error=1").into_response();
+        }
     }
 
-    // Store the user ID in the session.
     if session.insert(SESSION_USER_ID_KEY, user.id).await.is_err() {
+        tracing::error!("Failed to create session for user: {}", user.username);
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Html("<h1>Session error. Please try again.</h1>".to_string()),
@@ -63,12 +77,14 @@ pub async fn handle_login(
             .into_response();
     }
 
+    tracing::info!("User logged in: {}", user.username);
     Redirect::to("/").into_response()
 }
 
 /// POST /logout — destroys the session and redirects to login.
 pub async fn handle_logout(session: Session) -> impl IntoResponse {
     let _ = session.flush().await;
+    tracing::info!("User logged out");
     Redirect::to("/login").into_response()
 }
 
@@ -114,9 +130,12 @@ pub async fn handle_add_recipe(
     Json(new_recipe): Json<Recipe>,
 ) -> impl IntoResponse {
     match manager::add_recipe(&pool, new_recipe).await {
-        Ok(_) => (StatusCode::CREATED, Json(serde_json::json!({ "status": "created" }))),
+        Ok(_) => {
+            tracing::info!("Recipe added");
+            (StatusCode::CREATED, Json(serde_json::json!({ "status": "created" })))
+        }
         Err(err_msg) => {
-            eprintln!("Error saving recipe: {err_msg}");
+            tracing::error!("Error saving recipe: {err_msg}");
             (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": err_msg })))
         }
     }
@@ -128,9 +147,12 @@ pub async fn handle_delete_recipe(
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
     match manager::delete_recipe(&pool, id).await {
-        Ok(_) => (StatusCode::OK, Json(serde_json::json!({ "status": "deleted" }))),
+        Ok(_) => {
+            tracing::info!("Recipe {} deleted", id);
+            (StatusCode::OK, Json(serde_json::json!({ "status": "deleted" })))
+        }
         Err(err_msg) => {
-            eprintln!("Error deleting recipe: {err_msg}");
+            tracing::error!("Error deleting recipe {id}: {err_msg}");
             (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": err_msg })))
         }
     }
@@ -143,9 +165,12 @@ pub async fn handle_update_recipe(
     Json(updated_recipe): Json<Recipe>,
 ) -> impl IntoResponse {
     match manager::update_recipe(&pool, id, updated_recipe).await {
-        Ok(_) => (StatusCode::OK, Json(serde_json::json!({ "status": "updated" }))),
+        Ok(_) => {
+            tracing::info!("Recipe {} updated", id);
+            (StatusCode::OK, Json(serde_json::json!({ "status": "updated" })))
+        }
         Err(err_msg) => {
-            eprintln!("Error updating recipe: {err_msg}");
+            tracing::error!("Error updating recipe {id}: {err_msg}");
             (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": err_msg })))
         }
     }
@@ -191,7 +216,7 @@ pub async fn handle_get_meal_entries(
     match calendar_manager::get_meals_in_range(&pool, params.start, params.end).await {
         Ok(entries) => (StatusCode::OK, Json(entries)).into_response(),
         Err(err_msg) => {
-            eprintln!("Error fetching meal entries: {err_msg}");
+            tracing::error!("Error fetching meal entries: {err_msg}");
             (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": err_msg }))).into_response()
         }
     }
@@ -204,9 +229,12 @@ pub async fn handle_plan_meal(
     Json(entry): Json<MealEntry>,
 ) -> impl IntoResponse {
     match calendar_manager::plan_meal(&pool, entry.date, entry.slot, entry.recipe_id).await {
-        Ok(_) => (StatusCode::CREATED, Json(serde_json::json!({ "status": "planned" }))),
+        Ok(_) => {
+            tracing::info!("Meal planned: recipe {} on {}", entry.recipe_id, entry.date);
+            (StatusCode::CREATED, Json(serde_json::json!({ "status": "planned" })))
+        }
         Err(err_msg) => {
-            eprintln!("Error planning meal: {err_msg}");
+            tracing::error!("Error planning meal: {err_msg}");
             (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": err_msg })))
         }
     }
@@ -221,7 +249,7 @@ pub async fn handle_delete_meal_entry(
     match calendar_manager::remove_planned_meal(&pool, params.date, params.slot).await {
         Ok(_) => (StatusCode::OK, Json(serde_json::json!({ "status": "deleted" }))),
         Err(err_msg) => {
-            eprintln!("Error deleting meal entry: {err_msg}");
+            tracing::error!("Error deleting meal entry: {err_msg}");
             (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": err_msg })))
         }
     }
@@ -238,9 +266,12 @@ pub async fn handle_mark_cooked(
     Json(entry): Json<CookedEntry>,
 ) -> impl IntoResponse {
     match calendar_manager::mark_as_cooked(&pool, entry.date, entry.recipe_id).await {
-        Ok(_) => (StatusCode::CREATED, Json(serde_json::json!({ "status": "logged" }))),
+        Ok(_) => {
+            tracing::info!("Recipe {} marked cooked on {}", entry.recipe_id, entry.date);
+            (StatusCode::CREATED, Json(serde_json::json!({ "status": "logged" })))
+        }
         Err(err_msg) => {
-            eprintln!("Error logging cooked entry: {err_msg}");
+            tracing::error!("Error logging cooked entry: {err_msg}");
             (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": err_msg })))
         }
     }
@@ -255,7 +286,7 @@ pub async fn handle_get_cooked_entries(
     match calendar_manager::get_cooked_in_range(&pool, params.start, params.end).await {
         Ok(entries) => (StatusCode::OK, Json(entries)).into_response(),
         Err(err_msg) => {
-            eprintln!("Error fetching cooked entries: {err_msg}");
+            tracing::error!("Error fetching cooked entries: {err_msg}");
             (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": err_msg }))).into_response()
         }
     }
@@ -274,7 +305,7 @@ pub async fn handle_shopping_list(
     match calendar_manager::get_shopping_list(&pool, params.start, params.end).await {
         Ok(ingredients) => (StatusCode::OK, Json(ingredients)).into_response(),
         Err(err_msg) => {
-            eprintln!("Error generating shopping list: {err_msg}");
+            tracing::error!("Error generating shopping list: {err_msg}");
             (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": err_msg }))).into_response()
         }
     }

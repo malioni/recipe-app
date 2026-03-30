@@ -1,5 +1,6 @@
 use recipe_app::{auth, network, storage};
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{get, post},
     Router,
 };
@@ -12,6 +13,20 @@ use tower_sessions_sqlx_store::SqliteStore;
 
 #[tokio::main]
 async fn main() {
+    // Initialise structured logging. The RUST_LOG environment variable
+    // controls the log level (e.g. RUST_LOG=info cargo run).
+    // Defaults to "info" if RUST_LOG is not set.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
+    // Load .env file into the process environment if it exists.
+    // This is a no-op if the file is absent, so it is safe in all environments.
+    dotenvy::dotenv().ok();
+
     // Create the db/ directory if it doesn't exist.
     std::fs::create_dir_all("db").expect("Failed to create db/ directory");
 
@@ -21,6 +36,8 @@ async fn main() {
         .connect("sqlite://db/recipe_app.db?mode=rwc")
         .await
         .expect("Failed to connect to database");
+
+    tracing::info!("Connected to database");
 
     // Run migrations. include_str! embeds the SQL at compile time so the
     // migrations file must be present when building but not at runtime.
@@ -42,7 +59,7 @@ async fn main() {
         storage::create_user(&pool, &username, &hash)
             .await
             .expect("Failed to create initial user");
-        println!("Created initial user: {username}");
+        tracing::info!("Created initial user: {}", username);
     }
 
     // Configure the session store backed by SQLite so sessions survive restarts.
@@ -76,11 +93,15 @@ async fn main() {
         .route("/calendar/cooked", get(network::handle_get_cooked_entries)
             .post(network::handle_mark_cooked))
         .route("/calendar/shopping-list", get(network::handle_shopping_list))
-        .layer(session_layer)        // session middleware wraps all routes
+        // Middleware — order matters: session wraps all routes, body limit
+        // is applied first so oversized requests are rejected before any
+        // handler or session logic runs.
+        .layer(session_layer)
+        .layer(DefaultBodyLimit::max(64 * 1024)) // 64KB max request body
         .with_state(pool);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 7878));
     let listener = TcpListener::bind(addr).await.unwrap();
-    println!("Listening on {addr}");
+    tracing::info!("Listening on {addr}");
     axum::serve(listener, app).await.unwrap();
 }

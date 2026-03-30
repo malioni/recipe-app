@@ -10,10 +10,13 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "macros", "chrono"] }
+dotenvy = "0.15"
 argon2 = "0.5"
 time = "0.3"
 tower-sessions = "0.13"
 tower-sessions-sqlx-store = { version = "0.14", features = ["sqlite"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies] # only needed for tests
 http-body-util = "0.1"

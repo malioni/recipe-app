@@ -97,13 +97,19 @@
         </a>
 
         <h1 id="recipe-name" class="text-center mb-4">Loading...</h1>
-        <img
-          id="recipe-image"
-          src=""
-          alt=""
-          class="img-fluid rounded mb-4"
-          style="display: none"
-        />
+
+        <!-- Source link — shown only when the recipe has a source_url -->
+        <p id="recipe-source" class="text-center mb-4" style="display: none">
+          <a
+            id="recipe-source-link"
+            href="#"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="text-muted small"
+          >
+            <i class="bi bi-box-arrow-up-right me-1"></i>View original recipe
+          </a>
+        </p>
 
         <div id="recipe-error" class="alert alert-danger d-none">
           Recipe not found.
@@ -188,7 +194,13 @@
       // ----------------------------------------------------------------
       // List view
       // ----------------------------------------------------------------
+      let recipeListLoading = false;
+
       async function loadRecipeList() {
+        // Guard against concurrent calls — navigating quickly or multiple
+        // hashchange events firing at once can cause duplicate renders.
+        if (recipeListLoading) return;
+        recipeListLoading = true;
         const grid = document.getElementById("recipes-grid");
         const errorEl = document.getElementById("list-error");
         const emptyEl = document.getElementById("empty-state");
@@ -206,48 +218,60 @@
           if (recipes.length === 0) {
             emptyEl.classList.remove("d-none");
             countEl.textContent = "";
+            recipeListLoading = false;
             return;
           }
 
           countEl.textContent = `${recipes.length} recipe${
             recipes.length !== 1 ? "s" : ""
           }`;
-          grid.innerHTML = recipes
-            .map(
-              (recipe) => `
-          <div class="col-sm-6 col-md-4 col-lg-3">
-            <a href="#/recipes/${
-              recipe.id
-            }" class="card shadow-sm h-100 recipe-card">
-              ${
-                recipe.picture
-                  ? `<img src="${recipe.picture}" class="card-img-top" alt="${recipe.name}"
-                     style="height:160px; object-fit:cover;">`
-                  : `<div class="d-flex align-items-center justify-content-center bg-secondary-subtle"
-                        style="height:160px;">
-                     <i class="bi bi-journal-text text-secondary" style="font-size:2.5rem;"></i>
-                   </div>`
-              }
-              <div class="card-body">
-                <h5 class="card-title mb-1">${recipe.name}</h5>
-                <small class="text-muted">
-                  ${recipe.ingredients.length} ingredient${
-                recipe.ingredients.length !== 1 ? "s" : ""
-              }
-                  &middot;
-                  ${recipe.instructions.length} step${
-                recipe.instructions.length !== 1 ? "s" : ""
-              }
-                </small>
-              </div>
-            </a>
-          </div>
-        `
-            )
-            .join("");
+
+          // Build recipe cards using DOM APIs to prevent XSS — never use
+          // innerHTML with server-supplied values like recipe names.
+          recipes.forEach((recipe) => {
+            const col = document.createElement("div");
+            col.className = "col-sm-6 col-md-4 col-lg-3";
+
+            const link = document.createElement("a");
+            link.href = `#/recipes/${recipe.id}`;
+            link.className = "card shadow-sm h-100 recipe-card";
+
+            const placeholder = document.createElement("div");
+            placeholder.className =
+              "d-flex align-items-center justify-content-center bg-secondary-subtle";
+            placeholder.style.height = "160px";
+            const icon = document.createElement("i");
+            icon.className = "bi bi-journal-text text-secondary";
+            icon.style.fontSize = "2.5rem";
+            placeholder.appendChild(icon);
+
+            const body = document.createElement("div");
+            body.className = "card-body";
+
+            const title = document.createElement("h5");
+            title.className = "card-title mb-1";
+            title.textContent = recipe.name;
+
+            const meta = document.createElement("small");
+            meta.className = "text-muted";
+            meta.textContent = `${recipe.ingredients.length} ingredient${
+              recipe.ingredients.length !== 1 ? "s" : ""
+            } · ${recipe.instructions.length} step${
+              recipe.instructions.length !== 1 ? "s" : ""
+            }`;
+
+            body.appendChild(title);
+            body.appendChild(meta);
+            link.appendChild(placeholder);
+            link.appendChild(body);
+            col.appendChild(link);
+            grid.appendChild(col);
+          });
         } catch (err) {
           console.error("Error loading recipes:", err);
           errorEl.classList.remove("d-none");
+        } finally {
+          recipeListLoading = false;
         }
       }
 
@@ -259,13 +283,12 @@
       async function loadRecipe(id) {
         currentRecipeId = null;
         const nameEl = document.getElementById("recipe-name");
-        const imgEl = document.getElementById("recipe-image");
         const errorEl = document.getElementById("recipe-error");
         const contentEl = document.getElementById("recipe-content");
         const deleteBtn = document.getElementById("delete-button");
 
         nameEl.textContent = "Loading...";
-        imgEl.style.display = "none";
+        document.getElementById("recipe-source").style.display = "none";
         errorEl.classList.add("d-none");
         contentEl.classList.remove("d-none");
         deleteBtn.style.display = "none";
@@ -288,13 +311,13 @@
       function renderRecipe(recipe) {
         document.getElementById("recipe-name").textContent = recipe.name;
 
-        const img = document.getElementById("recipe-image");
-        if (recipe.picture) {
-          img.src = recipe.picture;
-          img.alt = recipe.name;
-          img.style.display = "block";
+        const sourceEl = document.getElementById("recipe-source");
+        const sourceLinkEl = document.getElementById("recipe-source-link");
+        if (recipe.source_url) {
+          sourceLinkEl.href = recipe.source_url;
+          sourceEl.style.display = "block";
         } else {
-          img.style.display = "none";
+          sourceEl.style.display = "none";
         }
 
         const ingredientsList = document.getElementById("ingredients-list");

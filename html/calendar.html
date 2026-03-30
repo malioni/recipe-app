@@ -260,7 +260,8 @@
       let calendarData = {}; // { "YYYY-MM-DD": { breakfast: entry, ... } }
       let cookedData = {}; // { "YYYY-MM-DD-recipeId": true }
 
-      // Pending slot for modal selection
+      // Pending slot for modal selection — declared explicitly to avoid
+      // implicit globals which break in strict mode.
       let pendingDate = null;
       let pendingSlot = null;
 
@@ -284,8 +285,14 @@
         return d;
       }
 
+      // Format a Date as YYYY-MM-DD using local time rather than UTC.
+      // Using toISOString() would return UTC and could produce the wrong
+      // date for users west of UTC (e.g. US timezones) late at night.
       function toISO(date) {
-        return date.toISOString().slice(0, 10);
+        return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(
+          2,
+          "0"
+        )}-${String(date.getDate()).padStart(2, "0")}`;
       }
 
       function formatHeader(date) {
@@ -422,21 +429,38 @@
       function makeMealChip(name, date, slot, recipeId, cooked) {
         const chip = document.createElement("div");
         chip.className = `meal-chip${cooked ? " cooked" : ""}`;
-        chip.innerHTML = `
-          <span class="chip-name" title="${name}">${name}</span>
-          <span class="chip-actions">
-            ${
-              !cooked
-                ? `<button class="chip-btn" title="Mark as cooked" onclick="markCooked('${date}', ${recipeId}, this)">
-              <i class="bi bi-check-lg"></i>
-            </button>`
-                : ""
-            }
-            <button class="chip-btn text-danger" title="Remove" onclick="removeMeal('${date}', '${slot}')">
-              <i class="bi bi-x"></i>
-            </button>
-          </span>
-        `;
+
+        // Name span — textContent prevents XSS from recipe names
+        const nameSpan = document.createElement("span");
+        nameSpan.className = "chip-name";
+        nameSpan.title = name;
+        nameSpan.textContent = name;
+
+        const actions = document.createElement("span");
+        actions.className = "chip-actions";
+
+        if (!cooked) {
+          const cookBtn = document.createElement("button");
+          cookBtn.className = "chip-btn";
+          cookBtn.title = "Mark as cooked";
+          cookBtn.innerHTML = `<i class="bi bi-check-lg"></i>`;
+          cookBtn.addEventListener("click", function () {
+            markCooked(date, recipeId, cookBtn);
+          });
+          actions.appendChild(cookBtn);
+        }
+
+        const removeBtn = document.createElement("button");
+        removeBtn.className = "chip-btn text-danger";
+        removeBtn.title = "Remove";
+        removeBtn.innerHTML = `<i class="bi bi-x"></i>`;
+        removeBtn.addEventListener("click", function () {
+          removeMeal(date, slot);
+        });
+        actions.appendChild(removeBtn);
+
+        chip.appendChild(nameSpan);
+        chip.appendChild(actions);
         return chip;
       }
 
@@ -554,12 +578,18 @@
           ingredients.forEach((ing) => {
             const row = document.createElement("div");
             row.className = "ingredient-row";
-            row.innerHTML = `
-              <span>${ing.name}</span>
-              <span class="text-muted">${
-                ing.quantity % 1 === 0 ? ing.quantity : ing.quantity.toFixed(1)
-              } ${ing.unit}</span>
-            `;
+
+            const nameSpan = document.createElement("span");
+            nameSpan.textContent = ing.name;
+
+            const qtySpan = document.createElement("span");
+            qtySpan.className = "text-muted";
+            qtySpan.textContent = `${
+              ing.quantity % 1 === 0 ? ing.quantity : ing.quantity.toFixed(1)
+            } ${ing.unit}`;
+
+            row.appendChild(nameSpan);
+            row.appendChild(qtySpan);
             listEl.appendChild(row);
           });
         } catch (err) {
