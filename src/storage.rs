@@ -4,10 +4,76 @@
 /// about SQL queries, table names, or how recipes are physically stored.
 /// When the backend changes (e.g. SQLite → Postgres), only this file changes.
 use sqlx::SqlitePool;
-use crate::model::{Ingredient, Recipe};
+use crate::model::{Ingredient, Recipe, User};
 
 // ---------------------------------------------------------------------------
-// Public interface
+// Users
+// ---------------------------------------------------------------------------
+
+/// Loads a user by username.
+///
+/// Used by the login flow to retrieve the stored password hash for
+/// verification. Returns `None` if no user exists with that username.
+///
+/// # Errors
+///
+/// Returns `Err` if the query fails.
+pub async fn load_user_by_username(pool: &SqlitePool, username: &str) -> Result<Option<User>, String> {
+    let row = sqlx::query!(
+        "SELECT id, username, password_hash FROM users WHERE username = ?",
+        username
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Failed to query user: {e}"))?;
+
+    Ok(row.map(|r| User {
+        id: r.id.unwrap_or(0),
+        username: r.username,
+        password_hash: r.password_hash,
+    }))
+}
+
+/// Inserts a new user with a pre-hashed password.
+///
+/// The caller is responsible for hashing the password before calling this.
+/// Returns the assigned user ID.
+///
+/// # Errors
+///
+/// Returns `Err` if the username is already taken or the query fails.
+pub async fn create_user(pool: &SqlitePool, username: &str, password_hash: &str) -> Result<i64, String> {
+    let result = sqlx::query!(
+        "INSERT INTO users (username, password_hash) VALUES (?, ?)",
+        username,
+        password_hash,
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to create user: {e}"))?;
+
+    Ok(result.last_insert_rowid())
+}
+
+/// Returns true if the users table contains at least one row.
+///
+/// Used on startup to decide whether to seed the initial user from
+/// environment variables.
+///
+/// # Errors
+///
+/// Returns `Err` if the query fails.
+pub async fn any_users_exist(pool: &SqlitePool) -> Result<bool, String> {
+    let row = sqlx::query!("SELECT COUNT(*) as count FROM users")
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("Failed to count users: {e}"))?;
+
+    Ok(row.count > 0)
+}
+
+// ---------------------------------------------------------------------------
+// Recipes
 // ---------------------------------------------------------------------------
 
 /// Loads a single recipe by its ID.
@@ -41,7 +107,8 @@ pub async fn load_recipe(pool: &SqlitePool, id: i64) -> Result<Recipe, String> {
 /// Returns `Err` if the query fails.
 pub async fn load_all_recipes(pool: &SqlitePool, user_id: i64) -> Result<Vec<Recipe>, String> {
     let rows = sqlx::query!(
-        "SELECT id, name, source_url, ingredients, instructions FROM recipes WHERE user_id = ? ORDER BY id",
+        "SELECT id, name, source_url, ingredients, instructions
+         FROM recipes WHERE user_id = ? ORDER BY id",
         user_id
     )
     .fetch_all(pool)
@@ -160,7 +227,6 @@ fn parse_instructions(json: &str) -> Result<Vec<String>, String> {
 mod tests {
     use super::*;
 
-    /// Creates a fresh in-memory database and runs migrations for each test.
     async fn setup() -> SqlitePool {
         let pool = SqlitePool::connect(":memory:")
             .await
@@ -169,12 +235,42 @@ mod tests {
             .execute(&pool)
             .await
             .expect("Failed to run migrations");
-        // Insert the placeholder user.
-        sqlx::query("INSERT INTO users (id, username, password_hash) VALUES (1, 'test', 'placeholder')")
-            .execute(&pool)
-            .await
-            .expect("Failed to insert test user");
+        sqlx::query(
+            "INSERT INTO users (id, username, password_hash) VALUES (1, 'test', 'placeholder')"
+        )
+        .execute(&pool)
+        .await
+        .expect("Failed to insert test user");
         pool
+    }
+
+    #[tokio::test]
+    async fn test_any_users_exist_true() {
+        let pool = setup().await;
+        assert!(any_users_exist(&pool).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_any_users_exist_false() {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        sqlx::query(include_str!("../migrations/001_initial.sql"))
+            .execute(&pool).await.unwrap();
+        assert!(!any_users_exist(&pool).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_load_user_by_username_found() {
+        let pool = setup().await;
+        let user = load_user_by_username(&pool, "test").await.unwrap();
+        assert!(user.is_some());
+        assert_eq!(user.unwrap().username, "test");
+    }
+
+    #[tokio::test]
+    async fn test_load_user_by_username_not_found() {
+        let pool = setup().await;
+        let user = load_user_by_username(&pool, "nobody").await.unwrap();
+        assert!(user.is_none());
     }
 
     #[tokio::test]
@@ -225,8 +321,7 @@ mod tests {
         };
         let id = add_recipe(&pool, 1, &recipe).await.expect("Failed to add recipe");
         delete_recipe(&pool, id).await.expect("Failed to delete recipe");
-        let result = load_recipe(&pool, id).await;
-        assert!(result.is_err(), "Expected recipe to be gone after deletion");
+        assert!(load_recipe(&pool, id).await.is_err());
     }
 
     #[tokio::test]

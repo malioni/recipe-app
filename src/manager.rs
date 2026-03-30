@@ -1,14 +1,29 @@
 use sqlx::SqlitePool;
-use crate::model::Recipe;
+use crate::model::{Recipe, User};
 use crate::storage;
-
-// When authentication is implemented, replace SINGLE_USER_ID with the
-// session user's ID passed through from the network layer.
 use crate::SINGLE_USER_ID;
 
-/// Retrieves a recipe by its ID.
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
+/// Looks up a user by username.
 ///
-/// # Returns
+/// Returns `None` if no user exists with that username.
+/// Used by the login handler to retrieve the stored hash for verification.
+///
+/// # Errors
+///
+/// Returns `Err` if the query fails.
+pub async fn get_user_by_username(pool: &SqlitePool, username: &str) -> Result<Option<User>, String> {
+    storage::load_user_by_username(pool, username).await
+}
+
+// ---------------------------------------------------------------------------
+// Recipes
+// ---------------------------------------------------------------------------
+
+/// Retrieves a recipe by its ID.
 ///
 /// Returns `Some(Recipe)` if found, `None` if the ID does not exist or
 /// the query fails.

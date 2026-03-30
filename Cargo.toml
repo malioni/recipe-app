@@ -9,7 +9,11 @@ tokio = { version = "1.37", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
-sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio", "macros", "chrono"] }
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "macros", "chrono"] }
+argon2 = "0.5"
+time = "0.3"
+tower-sessions = "0.13"
+tower-sessions-sqlx-store = { version = "0.14", features = ["sqlite"] }
 
 [dev-dependencies] # only needed for tests
 http-body-util = "0.1"

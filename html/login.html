@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sign In — Recipe App</title>
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+    />
+    <style>
+      body {
+        background-color: #f8f9fa;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        margin: 0;
+      }
+      .login-card {
+        width: 100%;
+        max-width: 380px;
+        padding: 2.5rem;
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+      }
+      .login-card h1 {
+        font-size: 1.5rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+      }
+      .login-card .subtitle {
+        color: #6c757d;
+        font-size: 0.9rem;
+        margin-bottom: 2rem;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="login-card">
+      <h1>Recipe App</h1>
+      <p class="subtitle">Sign in to continue</p>
+
+      <!-- Error message — shown when ?error=1 is present in the URL -->
+      <div id="error-msg" class="alert alert-danger d-none" role="alert">
+        Incorrect username or password.
+      </div>
+
+      <form method="POST" action="/login">
+        <div class="mb-3">
+          <label for="username" class="form-label">Username</label>
+          <input
+            type="text"
+            class="form-control"
+            id="username"
+            name="username"
+            autocomplete="username"
+            required
+            autofocus
+          />
+        </div>
+        <div class="mb-4">
+          <label for="password" class="form-label">Password</label>
+          <input
+            type="password"
+            class="form-control"
+            id="password"
+            name="password"
+            autocomplete="current-password"
+            required
+          />
+        </div>
+        <button type="submit" class="btn btn-primary w-100">Sign In</button>
+      </form>
+    </div>
+
+    <script>
+      // Show the error banner if the server redirected back with ?error=1
+      if (new URLSearchParams(window.location.search).get("error")) {
+        document.getElementById("error-msg").classList.remove("d-none");
+      }
+    </script>
+  </body>
+</html>

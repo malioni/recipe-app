@@ -1,17 +1,14 @@
-use recipe_app::network;
+use recipe_app::{auth, network, storage};
 use axum::{
-    routing::{delete, get, post},
+    routing::{get, post},
     Router,
 };
 use sqlx::sqlite::SqlitePoolOptions;
 use std::net::SocketAddr;
+use time::Duration;
 use tokio::net::TcpListener;
-
-/// The ID of the single placeholder user.
-/// All data is owned by this user until real authentication is implemented.
-/// When auth is added, replace this constant with the session user's ID
-/// in each manager function — the schema requires no changes.
-pub const SINGLE_USER_ID: i64 = 1;
+use tower_sessions::{Expiry, SessionManagerLayer};
+use tower_sessions_sqlx_store::SqliteStore;
 
 #[tokio::main]
 async fn main() {
@@ -21,7 +18,7 @@ async fn main() {
     // Open (or create) the SQLite database and configure the connection pool.
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
-        .connect("sqlite:db/recipe_app.db")
+        .connect("sqlite://db/recipe_app.db?mode=rwc")
         .await
         .expect("Failed to connect to database");
 
@@ -32,18 +29,38 @@ async fn main() {
         .await
         .expect("Failed to run migrations");
 
-    // Insert the placeholder user if they don't already exist.
-    // password_hash is a placeholder — it is never used for authentication
-    // until real auth is implemented.
-    sqlx::query(
-        "INSERT OR IGNORE INTO users (id, username, password_hash) VALUES (?, 'default', 'placeholder')"
-    )
-    .bind(SINGLE_USER_ID)
-    .execute(&pool)
-    .await
-    .expect("Failed to insert placeholder user");
+    // Seed the initial user from environment variables if no users exist yet.
+    // Set INITIAL_USERNAME and INITIAL_PASSWORD in your .env file before
+    // first boot. After the user is created these variables are no longer read.
+    if !storage::any_users_exist(&pool).await.expect("Failed to check users") {
+        let username = std::env::var("INITIAL_USERNAME")
+            .expect("No users exist. Set INITIAL_USERNAME in your .env file.");
+        let password = std::env::var("INITIAL_PASSWORD")
+            .expect("No users exist. Set INITIAL_PASSWORD in your .env file.");
+        let hash = auth::hash_password(&password)
+            .expect("Failed to hash initial password");
+        storage::create_user(&pool, &username, &hash)
+            .await
+            .expect("Failed to create initial user");
+        println!("Created initial user: {username}");
+    }
+
+    // Configure the session store backed by SQLite so sessions survive restarts.
+    let session_store = SqliteStore::new(pool.clone());
+    session_store
+        .migrate()
+        .await
+        .expect("Failed to migrate session store");
+
+    // Sessions expire after 7 days of inactivity.
+    let session_layer = SessionManagerLayer::new(session_store)
+        .with_secure(false)          // set to true when serving over HTTPS
+        .with_expiry(Expiry::OnInactivity(Duration::days(7)));
 
     let app = Router::new()
+        // Auth
+        .route("/login",  get(network::handle_login_page).post(network::handle_login))
+        .route("/logout", post(network::handle_logout))
         // Recipes
         .route("/", get(network::handle_index))
         .route("/recipes", get(network::handle_all_recipes).post(network::handle_add_recipe))
@@ -59,6 +76,7 @@ async fn main() {
         .route("/calendar/cooked", get(network::handle_get_cooked_entries)
             .post(network::handle_mark_cooked))
         .route("/calendar/shopping-list", get(network::handle_shopping_list))
+        .layer(session_layer)        // session middleware wraps all routes
         .with_state(pool);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 7878));

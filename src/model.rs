@@ -34,8 +34,8 @@ impl std::fmt::Display for MealSlot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             MealSlot::Breakfast => write!(f, "breakfast"),
-            MealSlot::Lunch => write!(f, "lunch"),
-            MealSlot::Dinner => write!(f, "dinner"),
+            MealSlot::Lunch    => write!(f, "lunch"),
+            MealSlot::Dinner   => write!(f, "dinner"),
         }
     }
 }
@@ -55,4 +55,22 @@ pub struct CookedEntry {
     /// Date serialized as "YYYY-MM-DD" in JSON.
     pub date: NaiveDate,
     pub recipe_id: i64,
+}
+
+/// A registered user.
+///
+/// `password_hash` is never serialized — it must never appear in an API
+/// response. The field is intentionally excluded from `Serialize`.
+#[derive(Deserialize, Debug, Clone)]
+pub struct User {
+    pub id: i64,
+    pub username: String,
+    pub password_hash: String,
+}
+
+/// The form payload submitted on the login page.
+#[derive(Deserialize, Debug)]
+pub struct LoginForm {
+    pub username: String,
+    pub password: String,
 }
