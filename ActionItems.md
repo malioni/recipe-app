@@ -121,13 +121,13 @@ This is a multi-user recipe and meal planning application, intended to run on a 
 
 ## Phase 2 — Soon (Correctness & Robustness)
 
-### 8. [ ] Replace `picture` Field with `source_url` (see item 18 for full scope)
+### 8. [x] Replace `picture` Field with `source_url` (see item 18 for full scope)
 
 **Note:** This is the backend portion of item 18. Listed here as a reminder that model and storage changes are needed alongside the frontend changes.
 
 ---
 
-### 9. [ ] Add Server-Side Input Validation
+### 9. [x] Add Server-Side Input Validation
 
 **Actions:**
 
@@ -142,7 +142,7 @@ This is a multi-user recipe and meal planning application, intended to run on a 
 
 ---
 
-### 10. [ ] Add Rate Limiting
+### 10. [x] Add Rate Limiting
 
 **Actions:**
 
@@ -152,7 +152,7 @@ This is a multi-user recipe and meal planning application, intended to run on a 
 
 ---
 
-### 11. [ ] Serve `404.html` for Unmatched Routes
+### 11. [x] Serve `404.html` for Unmatched Routes
 
 **Actions:**
 
@@ -160,7 +160,7 @@ This is a multi-user recipe and meal planning application, intended to run on a 
 
 ---
 
-### 12. [ ] Fix HTML Handlers to Return Proper Error Status Codes
+### 12. [x] Fix HTML Handlers to Return Proper Error Status Codes
 
 **Actions:**
 
@@ -216,7 +216,7 @@ This is a multi-user recipe and meal planning application, intended to run on a 
 
 ---
 
-### 18. [ ] Replace `picture` Field with `source_url` Across the Full Stack
+### 18. [x] Replace `picture` Field with `source_url` Across the Full Stack
 
 **Context:** The `picture` field was designed for an image URL or path but is a storage abuse risk if it ever accepts raw image data. It has been replaced conceptually with `source_url` — an optional link to the website where the recipe was obtained (for attribution, photos, videos, or more detailed steps). Image uploads are explicitly out of scope until an object storage strategy with per-user byte quotas is in place.
 

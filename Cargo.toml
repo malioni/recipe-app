@@ -17,6 +17,8 @@ tower-sessions = "0.13"
 tower-sessions-sqlx-store = { version = "0.14", features = ["sqlite"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+validator = { version = "0.18", features = ["derive"] }
+tower_governor = "0.4"
 
 [dev-dependencies] # only needed for tests
 http-body-util = "0.1"

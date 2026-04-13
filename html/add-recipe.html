@@ -39,6 +39,19 @@
         />
       </div>
 
+      <!-- Source URL -->
+      <div class="mb-3">
+        <label for="recipe-source-url" class="form-label">
+          Source URL <span class="text-muted fw-normal">(optional)</span>
+        </label>
+        <input
+          type="url"
+          class="form-control"
+          id="recipe-source-url"
+          placeholder="https://example.com/recipe"
+        />
+      </div>
+
       <!-- Ingredients -->
       <div class="mb-4">
         <h2 class="h5">Ingredients</h2>
@@ -117,6 +130,8 @@
       // ----------------------------------------------------------------
       function populateForm(recipe) {
         document.getElementById("recipe-title").value = recipe.name;
+        document.getElementById("recipe-source-url").value =
+          recipe.source_url ?? "";
 
         recipe.ingredients.forEach((ing) =>
           addIngredient(ing.name, ing.quantity, ing.unit)
@@ -153,7 +168,8 @@
 
         const recipe = {
           name: title,
-          picture: "",
+          source_url:
+            document.getElementById("recipe-source-url").value.trim() || null,
           ingredients,
           instructions,
         };

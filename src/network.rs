@@ -1,5 +1,6 @@
 use axum::{
     response::{IntoResponse, Html, Redirect},
+    response::Response,
     extract::{Path, Json, Query, State},
     http::StatusCode,
     Form,
@@ -29,11 +30,13 @@ pub async fn handle_login_page(session: Session) -> impl IntoResponse {
         return Redirect::to("/").into_response();
     }
 
-    Html(
-        std::fs::read_to_string("html/login.html")
-            .unwrap_or_else(|_| "<h1>Error loading login page</h1>".to_string()),
-    )
-    .into_response()
+    match tokio::fs::read_to_string("html/login.html").await {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to read login.html: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, Html("<h1>Internal Server Error</h1>".to_string())).into_response()
+        }
+    }
 }
 
 /// POST /login — validates credentials and creates a session.
@@ -93,8 +96,13 @@ pub async fn handle_logout(session: Session) -> impl IntoResponse {
 // ---------------------------------------------------------------------------
 
 pub async fn handle_index(_auth: AuthUser) -> impl IntoResponse {
-    Html(std::fs::read_to_string("html/index.html")
-        .unwrap_or_else(|_| "<h1>Error</h1>".to_string()))
+    match tokio::fs::read_to_string("html/index.html").await {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to read index.html: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, Html("<h1>Internal Server Error</h1>".to_string())).into_response()
+        }
+    }
 }
 
 pub async fn handle_all_recipes(
@@ -120,8 +128,13 @@ pub async fn handle_recipe(
 }
 
 pub async fn handle_new_recipe_page(_auth: AuthUser) -> impl IntoResponse {
-    Html(std::fs::read_to_string("html/add-recipe.html")
-        .unwrap_or_else(|_| "<h1>Error</h1>".to_string()))
+    match tokio::fs::read_to_string("html/add-recipe.html").await {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to read add-recipe.html: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, Html("<h1>Internal Server Error</h1>".to_string())).into_response()
+        }
+    }
 }
 
 pub async fn handle_add_recipe(
@@ -199,8 +212,13 @@ pub struct DeleteMealParams {
 // ---------------------------------------------------------------------------
 
 pub async fn handle_calendar_page(_auth: AuthUser) -> impl IntoResponse {
-    Html(std::fs::read_to_string("html/calendar.html")
-        .unwrap_or_else(|_| "<h1>Error</h1>".to_string()))
+    match tokio::fs::read_to_string("html/calendar.html").await {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to read calendar.html: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, Html("<h1>Internal Server Error</h1>".to_string())).into_response()
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -307,6 +325,19 @@ pub async fn handle_shopping_list(
         Err(err_msg) => {
             tracing::error!("Error generating shopping list: {err_msg}");
             (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": err_msg }))).into_response()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Error Handling
+// ---------------------------------------------------------------------------
+pub async fn handle_404() -> Response {
+    match tokio::fs::read_to_string("html/404.html").await {
+        Ok(html) => (StatusCode::NOT_FOUND, Html(html)).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to read 404.html: {e}");
+            (StatusCode::NOT_FOUND, Html("<h1>404 Not Found</h1>".to_string())).into_response()
         }
     }
 }

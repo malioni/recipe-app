@@ -10,6 +10,9 @@ use crate::calendar_storage;
 use crate::storage;
 use crate::SINGLE_USER_ID;
 
+/// Maximum number of meal plan entries a single user may have at once.
+const MAX_MEAL_PLAN_ENTRIES: usize = 1000;    
+
 // ---------------------------------------------------------------------------
 // Meal plan
 // ---------------------------------------------------------------------------
@@ -44,6 +47,16 @@ pub async fn plan_meal(
     // Verify the recipe exists before linking it.
     storage::load_recipe(pool, recipe_id).await
         .map_err(|_| format!("Recipe with ID {} not found", recipe_id))?;
+
+    // Enforce per-user meal plan quota. Use a large window to count all entries.
+    let all_entries = calendar_storage::load_meal_entries_in_range(
+        pool, SINGLE_USER_ID,
+        chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
+        chrono::NaiveDate::from_ymd_opt(9999, 12, 31).unwrap(),
+    ).await?;
+    if all_entries.len() >= MAX_MEAL_PLAN_ENTRIES {
+        return Err(format!("Meal plan limit of {} entries reached", MAX_MEAL_PLAN_ENTRIES));
+    }
 
     let entry = MealEntry { date, slot, recipe_id };
     calendar_storage::add_meal_entry(pool, SINGLE_USER_ID, &entry).await

@@ -1,23 +1,33 @@
 use serde::{Deserialize, Serialize};
 use chrono::NaiveDate;
+use validator::Validate;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Validate)]
 pub struct Ingredient {
+    #[validate(length(min = 1, max = 100))]
     pub name: String,
+    #[validate(custom(function = "is_finite_positive"))]
     pub quantity: f32,
+    #[validate(length(max = 32))]
     pub unit: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Validate)]
 pub struct Recipe {
     /// SQLite AUTOINCREMENT returns i64; using i64 throughout avoids casting.
     #[serde(default)]
     pub id: i64,
+    #[validate(length(min = 1, max = 200))]
     pub name: String,
     /// Link to the website where this recipe was originally found.
     /// Not all recipes have a source, so this field is optional.
+    #[validate(url, length(max = 500))]
     pub source_url: Option<String>,
+    #[validate(length(max = 50), nested)]
     pub ingredients: Vec<Ingredient>,
+    #[validate(length(max = 100))]
     pub instructions: Vec<String>,
 }
 
@@ -73,4 +83,12 @@ pub struct User {
 pub struct LoginForm {
     pub username: String,
     pub password: String,
+}
+
+fn is_finite_positive(val: f32) -> Result<(), validator::ValidationError> {
+    if val.is_finite() && val >= 0.0 {
+        Ok(())
+    } else {
+        Err(validator::ValidationError::new("quantity must be finite and non-negative"))
+    }
 }

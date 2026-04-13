@@ -4,9 +4,15 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use std::sync::Arc;
+use tower_governor::{
+    governor::GovernorConfigBuilder, 
+    GovernorLayer,
+    key_extractor::PeerIpKeyExtractor,
+};
 use sqlx::sqlite::SqlitePoolOptions;
 use std::net::SocketAddr;
-use time::Duration;
+use time::Duration as TimeDuration;
 use tokio::net::TcpListener;
 use tower_sessions::{Expiry, SessionManagerLayer};
 use tower_sessions_sqlx_store::SqliteStore;
@@ -72,7 +78,22 @@ async fn main() {
     // Sessions expire after 7 days of inactivity.
     let session_layer = SessionManagerLayer::new(session_store)
         .with_secure(false)          // set to true when serving over HTTPS
-        .with_expiry(Expiry::OnInactivity(Duration::days(7)));
+        .with_expiry(Expiry::OnInactivity(TimeDuration::days(7)));
+
+    // Rate limiting: 60 requests per minute per IP address.
+    // replenish_rate is tokens added per second; burst_size is the maximum
+    // number of requests that can be made in a burst before throttling kicks in.
+    let governor_conf = Arc::new(
+        GovernorConfigBuilder::default()
+            .key_extractor(PeerIpKeyExtractor)
+            .per_second(1)
+            .burst_size(10)
+            .finish()
+            .expect("Failed to build rate limiter config"),
+    );
+    let governor_layer = GovernorLayer {
+        config: governor_conf,
+    };
 
     let app = Router::new()
         // Auth
@@ -93,15 +114,19 @@ async fn main() {
         .route("/calendar/cooked", get(network::handle_get_cooked_entries)
             .post(network::handle_mark_cooked))
         .route("/calendar/shopping-list", get(network::handle_shopping_list))
+        .fallback(network::handle_404)
         // Middleware — order matters: session wraps all routes, body limit
         // is applied first so oversized requests are rejected before any
         // handler or session logic runs.
         .layer(session_layer)
         .layer(DefaultBodyLimit::max(64 * 1024)) // 64KB max request body
+        .layer(governor_layer)
         .with_state(pool);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 7878));
     let listener = TcpListener::bind(addr).await.unwrap();
     tracing::info!("Listening on {addr}");
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+        .await
+        .unwrap();
 }
