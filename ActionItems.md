@@ -7,13 +7,16 @@
 
 ## Project Context & Security Notes
 
-This is a multi-user recipe and meal planning application, intended to run on a home network at minimum and potentially be published to the web. The following threat model should be kept in mind when making architectural decisions:
+This is a multi-user recipe and meal planning application, intended to run on a home network at minimum and potentially be published to the web. The target deployment is a **Raspberry Pi 3** on the home LAN (Raspberry Pi OS, `systemd`-managed), but all architectural decisions should preserve a clear upgrade path to public internet hosting. LAN-only solutions are acceptable only if they can be upgraded later without structural rework.
+
+The following threat model should be kept in mind when making architectural decisions:
 
 - **Authentication is required** before the app leaves localhost. A single Axum middleware handles this for all routes.
 - **Resource abuse is a real risk** for any multi-user app. Bad actors may attempt to use the app as general-purpose storage. Mitigations are layered across the stack: request body size limits (framework layer), field length and count limits (validation layer), per-user quotas (manager layer), and rate limiting (middleware layer).
 - **The `picture` field has been removed** from the `Recipe` model (see item 18). Storing image data or large base64 strings in that field was the primary storage abuse vector. It has been replaced with an optional `source_url` field.
 - **Image uploads are explicitly out of scope** until a proper object storage strategy (disk or S3/R2) with per-user byte quotas is designed. Do not add image upload functionality without addressing storage limits first.
 - **SQLite size management:** SQLite has no native file size cap. Size is managed through application-level controls (field length limits, per-user record quotas, purging old calendar entries) rather than raw file size limits. `PRAGMA auto_vacuum = INCREMENTAL` should be enabled to reclaim space from deleted rows on a schedule.
+- **Raspberry Pi SD card wear:** SQLite writes (even with WAL) cause ongoing SD card wear. For a 24/7 Pi deployment, the database file and `.env` should live on a USB SSD rather than the SD card. The systemd `WorkingDirectory` and `DATABASE_URL` in `.env` should point to the USB mount path.
 
 ---
 
@@ -268,22 +271,106 @@ This is a multi-user recipe and meal planning application, intended to run on a 
 
 ---
 
+## Phase 4 — Deployment & Integrations
+
+### 22. [ ] Raspberry Pi Deployment via `systemd`
+
+**Context:** The app will run on a Raspberry Pi 3 on the home LAN, managed by `systemd` so it restarts automatically on reboot or crash.
+
+**Actions:**
+
+- Cross-compile for `aarch64-unknown-linux-gnu` on the dev machine, or compile directly on the Pi
+- Create `/etc/systemd/system/recipe-app.service` with:
+  - `After=network.target`
+  - `EnvironmentFile=` pointing to the `.env` file (keep secrets out of the unit file)
+  - `Restart=on-failure` and `RestartSec=5`
+- Ensure `.env` is `chmod 600` and owned by the service user
+- Store the SQLite database on a USB SSD, not the SD card — set `DATABASE_URL` in `.env` to the USB mount path
+- Run `sudo systemctl enable recipe-app` to auto-start on boot
+- Verify with `sudo systemctl status recipe-app` after reboot
+
+**Notes:** This approach works as-is for LAN. If the app is later exposed to the internet, a reverse proxy (`caddy` or `nginx`) should sit in front of it to handle TLS. The systemd unit itself doesn't need to change.
+
+---
+
+### 23. [ ] TLS / HTTPS Strategy (Decide Before Going Public)
+
+**Context:** Plain HTTP is acceptable on a trusted LAN. Before the app is accessible from the internet, TLS is required. This item is about deciding the approach — not necessarily implementing it immediately.
+
+**Decision to make:** Choose one of:
+
+- **A) Caddy reverse proxy** — `caddy` handles TLS termination (Let's Encrypt or local CA), proxies to the Axum app on localhost. Minimal Axum changes; Caddy manages cert renewal. Works for both LAN (self-signed) and public (ACME).
+- **B) TLS in Axum directly** — `axum-server` with `rustls`. More control, no extra process, but cert renewal must be handled manually or via a sidecar.
+- **C) Cloudflare Tunnel** — No port-forwarding, no public IP needed. Cloudflare terminates TLS. Works well for a home server going public without router changes.
+
+**Recommendation:** Option A (Caddy) or C (Cloudflare Tunnel) are the most practical for a Pi home server going public. Decide before exposing to the internet.
+
+---
+
+### 24. [ ] Per-User Rate Limiting (Upgrade from IP-Based)
+
+**Context:** Current rate limiting uses `PeerIpKeyExtractor` (IP-based). For a multi-user app, user-based limiting is more meaningful and accurate (multiple users may share an IP; a single user may rotate IPs).
+
+**Decision to make:** Implementing user-based rate limiting with `tower_governor` requires a custom `KeyExtractor` that reads the session. This implies reorganising routes into an authenticated sub-router so the extractor can assume a valid session exists. Decide whether to implement now or defer until full multi-user support (item 26).
+
+**Actions (when ready):**
+
+- Implement a custom `KeyExtractor` that extracts `user_id` from the session
+- Wrap authenticated routes in a sub-router with the user-keyed governor layer
+- Keep IP-based limiting as an outer layer for unauthenticated routes (login page, static assets)
+
+---
+
+### 25. [ ] Shopping List Export Endpoint + Apple Shortcuts Integration
+
+**Context:** The shopping list (aggregated ingredients across meal plan entries for a date range) should be exposed as a clean JSON API endpoint. An Apple Shortcut on iPhone calls this endpoint and creates Reminders items from the response — no native iOS app needed.
+
+**Design decisions to make:**
+
+- **Auth for the endpoint:** Session cookies work but expire and are fragile in Shortcuts. A static read-only `SHOPPING_LIST_TOKEN` env var checked as a Bearer token or query param is simpler and sufficient for a read-only LAN/personal endpoint. Decide before implementing.
+- **Ingredient unit normalisation:** Summing `200g` + `0.2kg` requires unit conversion. Must be implemented — summing mismatched units silently is wrong. Design the normalisation logic before writing the query.
+
+**Actions:**
+
+- Add `ShoppingListItem` struct to `model.rs` (aggregated ingredient: name, total quantity, unit)
+- Add a storage query in `calendar_storage.rs` that fetches ingredients for all meal entries in a date range, grouped and summed by `(name, unit)` after normalisation
+- Add a manager method in `calendar_manager.rs`
+- Add `GET /api/shopping-list?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD` to `network.rs`; default range is the current week (Mon–Sun) if params are omitted
+- Implement ingredient unit normalisation (at minimum: `g`/`kg`, `ml`/`l`, `tsp`/`tbsp`/`cup`)
+- Document the Shortcut setup: "Get Contents of URL" → parse JSON → loop → "Add New Reminder"
+
+---
+
+### 26. [ ] Full Multi-User Support
+
+**Context:** The app currently uses a hardcoded `SINGLE_USER_ID` as an interim placeholder. Full multi-user support means users can register (or be invited), and all data is scoped to their `user_id`.
+
+**Actions:**
+
+- Remove `SINGLE_USER_ID` constant; derive `user_id` from the authenticated session on every request
+- Decide on registration model: open registration vs. admin-invite-only (the latter is more appropriate for a personal/family app)
+- Add user management routes if needed (admin creates accounts, changes passwords)
+- Audit all storage queries to ensure `user_id` filtering is present everywhere
+
+---
+
 ## Dependency Reference
 
-| Package                     | Current | Purpose             | Notes                                                                                  |
-| --------------------------- | ------- | ------------------- | -------------------------------------------------------------------------------------- |
-| `axum`                      | `0.7`   | Web framework       | Keep                                                                                   |
-| `tokio`                     | `1.37`  | Async runtime       | Keep                                                                                   |
-| `serde` / `serde_json`      | `1.0`   | Serialization       | Keep                                                                                   |
-| `chrono`                    | `0.4`   | Date types          | Keep; watch for friction with `sqlx` — may switch to `time` crate                      |
-| `sqlx`                      | —       | SQLite (planned)    | Add: `{ version = "0.7", features = ["sqlite", "runtime-tokio", "macros", "chrono"] }` |
-| `argon2`                    | —       | Password hashing    | Add when implementing auth                                                             |
-| `tower-sessions`            | —       | Session management  | Add when implementing auth                                                             |
-| `tower-sessions-sqlx-store` | —       | Session persistence | Add when implementing auth                                                             |
-| `validator`                 | —       | Input validation    | Add: `"0.18"`                                                                          |
-| `tower_governor`            | —       | Rate limiting       | Add when implementing rate limiting (item 10)                                          |
-| `tracing`                   | —       | Structured logging  | Add: `"0.1"`                                                                           |
-| `tracing-subscriber`        | —       | Log formatting      | Add: `{ version = "0.3", features = ["env-filter"] }`                                  |
+| Package                     | Current | Purpose             | Notes                                                                             |
+| --------------------------- | ------- | ------------------- | --------------------------------------------------------------------------------- |
+| `axum`                      | `0.7`   | Web framework       | Keep                                                                              |
+| `tokio`                     | `1.37`  | Async runtime       | Keep                                                                              |
+| `serde` / `serde_json`      | `1.0`   | Serialization       | Keep                                                                              |
+| `chrono`                    | `0.4`   | Date types          | Keep; watch for friction with `sqlx` — may switch to `time` crate                 |
+| `sqlx`                      | `0.8`   | SQLite              | `{ version = "0.8", features = ["sqlite", "runtime-tokio", "macros", "chrono"] }` |
+| `argon2`                    | added   | Password hashing    | In use                                                                            |
+| `tower-sessions`            | `0.13`  | Session management  | In use; version must align with `tower-sessions-sqlx-store`                       |
+| `tower-sessions-sqlx-store` | added   | Session persistence | In use                                                                            |
+| `validator`                 | `0.18`  | Input validation    | In use                                                                            |
+| `tower_governor`            | added   | Rate limiting       | In use; IP-based for now — see item 24 for user-based upgrade                     |
+| `tracing`                   | `0.1`   | Structured logging  | In use                                                                            |
+| `tracing-subscriber`        | `0.3`   | Log formatting      | In use; `{ version = "0.3", features = ["env-filter"] }`                          |
+| `dotenvy`                   | added   | `.env` loading      | In use                                                                            |
 
 ---
 
@@ -296,3 +383,5 @@ This is a multi-user recipe and meal planning application, intended to run on a 
 - **Image uploads are out of scope** until an object storage strategy with per-user byte quotas is designed. The `source_url` field stores a link to an external source only.
 - **SQLite → Postgres migration path:** If the app ever needs horizontal scaling or a hosted environment that doesn't persist local files, switching from SQLite to Postgres requires changing only the `sqlx` feature flag, the connection pool type, and the connection string. The rest of the codebase is unaffected by the storage layer boundary.
 - **Commit `Cargo.lock`:** For a binary application, `Cargo.lock` should be committed and treated as the source of truth for reproducible builds.
+- **Reverse proxy is the upgrade path for TLS:** The Axum app should always bind to `localhost:<port>` in production. A reverse proxy (`caddy`, `nginx`) or tunnel (Cloudflare) sits in front and handles TLS, domain routing, and cert renewal. This means the app itself never needs to change when adding HTTPS.
+- **Shopping list auth:** The `/api/shopping-list` endpoint will be called by Apple Shortcuts, which cannot easily manage expiring session cookies. A static read-only token (env var) is the appropriate auth mechanism for this endpoint. It's read-only and personal, so the risk profile is low.
