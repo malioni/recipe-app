@@ -1,9 +1,13 @@
 use recipe_app::{auth, network, storage};
 use axum::{
     extract::DefaultBodyLimit,
+    middleware::{self, Next},
+    response::Response,
+    http::Request,
     routing::{get, post},
     Router,
 };
+use tower_http::services::ServeDir;
 use std::sync::Arc;
 use tower_governor::{
     governor::GovernorConfigBuilder, 
@@ -115,6 +119,8 @@ async fn main() {
             .post(network::handle_mark_cooked))
         .route("/calendar/shopping-list", get(network::handle_shopping_list))
         .fallback(network::handle_404)
+        .nest_service("/static", ServeDir::new("static"))
+        .layer(middleware::from_fn(add_csp_header))
         // Middleware — order matters: session wraps all routes, body limit
         // is applied first so oversized requests are rejected before any
         // handler or session logic runs.
@@ -129,4 +135,22 @@ async fn main() {
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .unwrap();
+}
+
+async fn add_csp_header(request: Request<axum::body::Body>, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_SECURITY_POLICY,
+        // Allows Bootstrap and Bootstrap Icons from jsdelivr.net.
+        // 'self' covers all app-served HTML, JS, and API responses.
+        "default-src 'self'; \
+         script-src 'self' https://cdn.jsdelivr.net; \
+         style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; \
+         font-src 'self' https://cdn.jsdelivr.net; \
+         img-src 'self' data:; \
+         connect-src 'self'"
+            .parse()
+            .unwrap(),
+    );
+    response
 }

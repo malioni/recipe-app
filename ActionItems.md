@@ -169,7 +169,7 @@ This is a multi-user recipe and meal planning application, intended to run on a 
 
 ---
 
-### 13. [ ] Implement `Display` for `MealSlot`
+### 13. [x] Implement `Display` for `MealSlot`
 
 **Actions:**
 
@@ -178,7 +178,7 @@ This is a multi-user recipe and meal planning application, intended to run on a 
 
 ---
 
-### 14. [ ] Cascade-Delete Meal Plan Entries When a Recipe Is Deleted
+### 14. [x] Cascade-Delete Meal Plan Entries When a Recipe Is Deleted
 
 **Note:** If SQLite with foreign key constraints is implemented in item 1 with `ON DELETE CASCADE`, this is handled automatically at the database level and no separate application code is needed.
 
@@ -200,7 +200,7 @@ This is a multi-user recipe and meal planning application, intended to run on a 
 
 ---
 
-### 16. [ ] Invalidate `allRecipes` Cache in the Calendar Modal
+### 16. [x] Invalidate `allRecipes` Cache in the Calendar Modal
 
 **Actions:**
 
@@ -208,7 +208,7 @@ This is a multi-user recipe and meal planning application, intended to run on a 
 
 ---
 
-### 17. [ ] Add a `Content-Security-Policy` Header
+### 17. [x] Add a `Content-Security-Policy` Header
 
 **Actions:**
 
