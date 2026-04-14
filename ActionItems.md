@@ -242,7 +242,7 @@ This is a multi-user recipe and meal planning application, intended to run on a 
 
 ---
 
-### 19. [ ] Align `handle_delete_recipe` with REST Conventions
+### 19. [x] Align `handle_delete_recipe` with REST Conventions
 
 **Actions:**
 
@@ -251,7 +251,7 @@ This is a multi-user recipe and meal planning application, intended to run on a 
 
 ---
 
-### 20. [ ] Pin CDN Dependencies with Integrity Hashes
+### 20. [x] Pin CDN Dependencies with Integrity Hashes
 
 **Actions:**
 
@@ -259,7 +259,7 @@ This is a multi-user recipe and meal planning application, intended to run on a 
 
 ---
 
-### 21. [ ] Fix Floating Point Display in Shopping List
+### 21. [x] Fix Floating Point Display in Shopping List
 
 **Actions:**
 

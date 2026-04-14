@@ -90,8 +90,8 @@ async fn main() {
     let governor_conf = Arc::new(
         GovernorConfigBuilder::default()
             .key_extractor(PeerIpKeyExtractor)
-            .per_second(1)
-            .burst_size(10)
+            .per_second(5)
+            .burst_size(60)
             .finish()
             .expect("Failed to build rate limiter config"),
     );
@@ -108,8 +108,7 @@ async fn main() {
         .route("/recipes", get(network::handle_all_recipes).post(network::handle_add_recipe))
         .route("/recipes/new", get(network::handle_new_recipe_page))
         .route("/recipes/edit", get(network::handle_new_recipe_page))
-        .route("/recipes/:id", get(network::handle_recipe).put(network::handle_update_recipe))
-        .route("/recipes/:id/delete", post(network::handle_delete_recipe))
+        .route("/recipes/:id", get(network::handle_recipe).put(network::handle_update_recipe).delete(network::handle_delete_recipe))
         // Calendar
         .route("/calendar", get(network::handle_calendar_page))
         .route("/calendar/entries", get(network::handle_get_meal_entries)

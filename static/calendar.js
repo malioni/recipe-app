@@ -349,9 +349,11 @@ async function loadShoppingList() {
 
       const qtySpan = document.createElement("span");
       qtySpan.className = "text-muted";
-      qtySpan.textContent = `${
-        ing.quantity % 1 === 0 ? ing.quantity : ing.quantity.toFixed(1)
-      } ${ing.unit}`;
+      const qty =
+        ing.quantity % 1 === 0
+          ? ing.quantity
+          : parseFloat(ing.quantity.toFixed(2));
+      qtySpan.textContent = `${qty} ${ing.unit}`;
 
       row.appendChild(nameSpan);
       row.appendChild(qtySpan);
