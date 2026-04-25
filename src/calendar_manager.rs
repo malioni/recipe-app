@@ -85,7 +85,7 @@ pub async fn plan_meal(
 ///
 /// Returns `Err` if the query fails.
 pub async fn remove_planned_meal(pool: &SqlitePool, id: i64) -> Result<(), String> {
-    calendar_storage::delete_meal_entry(pool, id).await
+    calendar_storage::delete_meal_entry(pool, SINGLE_USER_ID, id).await
 }
 
 // ---------------------------------------------------------------------------

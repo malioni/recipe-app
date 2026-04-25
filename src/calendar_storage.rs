@@ -40,7 +40,8 @@ pub async fn load_meal_entries_in_range(
             let date = row.date.parse::<NaiveDate>()
                 .map_err(|e| format!("Failed to parse date '{}': {e}", row.date))?;
             let slot = parse_slot(&row.slot)?;
-            Ok(MealEntry { id: row.id.unwrap_or(0), date, slot, recipe_id: row.recipe_id })
+            let id = row.id.ok_or_else(|| "meal_plan row missing id".to_string())?;
+            Ok(MealEntry { id, date, slot, recipe_id: row.recipe_id })
         })
         .collect()
 }
@@ -68,17 +69,17 @@ pub async fn add_meal_entry(pool: &SqlitePool, user_id: i64, entry: &MealEntry) 
     Ok(())
 }
 
-/// Removes a planned meal entry by its primary key.
+/// Removes a planned meal entry by its primary key, scoped to the owning user.
 ///
-/// Deleting a non-existent id is a no-op — idempotent by design.
+/// Deleting a non-existent id, or an id owned by a different user, is a no-op — idempotent by design.
 ///
 /// # Errors
 ///
 /// Returns `Err` if the query fails.
-pub async fn delete_meal_entry(pool: &SqlitePool, id: i64) -> Result<(), String> {
+pub async fn delete_meal_entry(pool: &SqlitePool, user_id: i64, id: i64) -> Result<(), String> {
     sqlx::query!(
-        "DELETE FROM meal_plan WHERE id = ?",
-        id
+        "DELETE FROM meal_plan WHERE id = ? AND user_id = ?",
+        id, user_id
     )
     .execute(pool)
     .await
@@ -94,7 +95,7 @@ pub async fn delete_meal_entry(pool: &SqlitePool, id: i64) -> Result<(), String>
 /// # Errors
 ///
 /// Returns `Err` if the query fails.
-pub async fn count_slot_entries(
+pub(crate) async fn count_slot_entries(
     pool: &SqlitePool,
     user_id: i64,
     date: NaiveDate,
@@ -280,7 +281,7 @@ mod tests {
         add_meal_entry(&pool, 1, &entry).await.unwrap();
         let loaded = load_meal_entries_in_range(&pool, 1, date, date).await.unwrap();
         let id = loaded[0].id;
-        delete_meal_entry(&pool, id).await.expect("Should delete successfully");
+        delete_meal_entry(&pool, 1, id).await.expect("Should delete successfully");
         let loaded = load_meal_entries_in_range(&pool, 1, date, date).await.unwrap();
         assert!(loaded.is_empty());
     }
@@ -289,7 +290,7 @@ mod tests {
     async fn test_delete_meal_entry_not_found() {
         let pool = setup().await;
         // Deleting a non-existent id is a no-op — idempotent by design.
-        assert!(delete_meal_entry(&pool, 999_999).await.is_ok());
+        assert!(delete_meal_entry(&pool, 1, 999_999).await.is_ok());
     }
 
     #[tokio::test]
@@ -306,7 +307,7 @@ mod tests {
         assert_eq!(loaded.len(), 2);
 
         // Delete only the first entry by id
-        delete_meal_entry(&pool, loaded[0].id).await.unwrap();
+        delete_meal_entry(&pool, 1, loaded[0].id).await.unwrap();
 
         let remaining = load_meal_entries_in_range(&pool, 1, date, date).await.unwrap();
         assert_eq!(remaining.len(), 1);
