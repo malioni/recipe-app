@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO cooked_log (user_id, date, recipe_id) VALUES (?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "02ba0d69cc76910380442617de2fd70bbc16d5a784e6b4ebb450f75a67c41ea6"
+}

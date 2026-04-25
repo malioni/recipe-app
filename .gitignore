@@ -29,3 +29,6 @@ target/
 
 # Environment variables
 .env
+
+# Claude Code local config and agent artifacts
+.claude/

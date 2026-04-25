@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT date, slot, recipe_id FROM meal_plan\n         WHERE user_id = ? AND date >= ? AND date <= ?\n         ORDER BY date, slot",
+  "describe": {
+    "columns": [
+      {
+        "name": "date",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "slot",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "recipe_id",
+        "ordinal": 2,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c67b11ef55ba322db0b645f3190bcb6734e1823dc35e112f3f02824f44f1a955"
+}
