@@ -192,6 +192,24 @@ The following threat model should be kept in mind when making architectural deci
 
 ---
 
+### 27. [ ] Allow Multiple Entries Per Slot
+
+**Context:** Currently `meal_plan` has `UNIQUE(user_id, date, slot)` enforced at the DB level, and `add_meal_entry` uses `INSERT OR REPLACE`. This means only one recipe per slot per day. The intended model is multiple entries per slot (main dish + salad + dessert all at dinner, for example).
+
+**Actions:**
+
+- Add a new migration that drops the `UNIQUE(user_id, date, slot)` constraint (SQLite requires recreating the table — `ALTER TABLE` cannot drop constraints)
+- Change `add_meal_entry` in `calendar_storage.rs` from `INSERT OR REPLACE` to plain `INSERT`
+- Change `delete_meal_entry` to delete by `id` rather than `(user_id, date, slot)` so individual entries can be targeted
+- Add `id` field to `MealEntry` in `model.rs`; populate it from the query result in `load_meal_entries_in_range`
+- Update `remove_planned_meal` in `calendar_manager.rs` to accept `id: i64` instead of `(date, slot)`
+- Update `handle_delete_meal_entry` in `network.rs` to read the entry `id` from the request body
+- Update `calendar.html` to send the entry `id` on delete
+- Flip `test_meal_entry_replace_on_same_slot` in `calendar_storage` — it now asserts the old behaviour being removed; replace with a test asserting both entries persist
+- Update integration test `test_calendar_plan_and_shopping_list` if it relies on slot uniqueness
+
+---
+
 ## Phase 3 — Nice to Have (UX & Polish)
 
 ### 15. [ ] Add Loading States to the Calendar UI
@@ -321,6 +339,46 @@ The following threat model should be kept in mind when making architectural deci
 
 ---
 
+### 28. [ ] GitHub Actions CI
+
+**Context:** Prerequisite for the agentic workflow (item 29). PRs should be blocked from merging until tests pass. Merge requires manual approval.
+
+**Actions:**
+
+- Create `.github/workflows/ci.yml` that runs on `push` and `pull_request` to `main`
+- Steps: checkout → install Rust stable → `cargo build --locked` → `cargo clippy -- -D warnings` → `cargo test`
+- Cache the `~/.cargo` registry and the `target/` directory between runs to avoid full recompiles on the Pi-class runners
+- Add a branch protection rule on `main`: require the `ci` status check to pass and require at least one human approval before merge
+
+---
+
+### 29. [ ] Agentic Workflow (Plan → Implement → Test → Review → Merge)
+
+**Context:** Automates the path from a GitHub issue to a reviewed, tested PR. Human stays in the loop at two gates: approving the plan before implementation starts, and approving the PR before merge.
+
+**Flow:**
+
+1. A GitHub issue is created and assigned to `claude`
+2. **Planning agent** (triggered by GitHub Actions `issues` event) reads the issue, inspects the codebase, and posts a structured implementation plan as an issue comment
+3. **Human approves** the plan by replying "approved" in the issue thread
+4. **Implementation agent** (triggered by a comment-match workflow) checks out a branch, implements the plan, and opens a PR
+5. **Test-writing agent** (triggered on PR open) reads the plan + diff and adds or updates tests to maintain coverage
+6. **Review agent** (triggered on PR open or push) posts a code review comment on the PR
+7. **GitHub Actions CI** (item 28) runs `cargo test`; PR is blocked until green
+8. **Human approves** the PR and merges
+
+**Actions:**
+
+- Implement planning agent: GitHub Actions workflow on `issues` event (type: assigned), use Claude API to read issue + relevant source files, post plan comment
+- Implement approval detection: workflow on `issue_comment` event, check comment body matches "approved" and commenter is the repo owner; dispatch implementation event
+- Implement implementation agent: checks out feature branch, calls Claude Code or Claude API with plan + codebase context, commits changes, opens PR
+- Implement test-writing agent: triggered on PR open, reads plan + diff, appends tests, pushes to same branch
+- Implement review agent: triggered on PR open/push, posts review as PR review comment
+- Store `ANTHROPIC_API_KEY` as a GitHub Actions secret
+- All agent prompts should reference `CLAUDE.md` for architecture rules and coding conventions
+
+---
+
 ### 25. [ ] Shopping List Export Endpoint + Apple Shortcuts Integration
 
 **Context:** The shopping list (aggregated ingredients across meal plan entries for a date range) should be exposed as a clean JSON API endpoint. An Apple Shortcut on iPhone calls this endpoint and creates Reminders items from the response — no native iOS app needed.
@@ -351,6 +409,79 @@ The following threat model should be kept in mind when making architectural deci
 - Decide on registration model: open registration vs. admin-invite-only (the latter is more appropriate for a personal/family app)
 - Add user management routes if needed (admin creates accounts, changes passwords)
 - Audit all storage queries to ensure `user_id` filtering is present everywhere
+
+---
+
+---
+
+## Phase 5 — Test Coverage Gaps
+
+> Identified in code review. All tests use in-memory SQLite via the existing `setup()` helpers.
+
+### 30. [ ] Quota Limit Tests
+
+**Context:** `MAX_RECIPES_PER_USER` (500) and `MAX_MEAL_PLAN_ENTRIES` (1000) are enforced in the manager layer but have no tests. Inserting the full count in tests is slow and fragile.
+
+**Actions:**
+
+- In `manager.rs`, replace the single constant with a cfg-gated pair:
+  ```rust
+  #[cfg(not(test))]
+  const MAX_RECIPES_PER_USER: usize = 500;
+  #[cfg(test)]
+  const MAX_RECIPES_PER_USER: usize = 3;
+  ```
+  Do the same for `MAX_MEAL_PLAN_ENTRIES` in `calendar_manager.rs`
+- Add `test_recipe_quota_enforced`: insert N recipes (where N = test limit), assert the (N+1)th call returns `Err` containing "limit"
+- Add `test_meal_plan_quota_enforced`: same pattern for meal plan entries
+
+---
+
+### 31. [ ] Validation Edge Case Tests
+
+**Context:** Several validation constraints on `Recipe` and `Ingredient` structs are untested.
+
+**Actions:**
+
+- `test_add_recipe_empty_name` — name `""` should fail (`min = 1`)
+- `test_add_recipe_too_many_ingredients` — 51 ingredients should fail (`max = 50`)
+- `test_add_recipe_too_many_instructions` — 101 instructions should fail (`max = 100`)
+- `test_add_recipe_ingredient_name_too_long` — ingredient name of 101 chars should fail (`max = 100`)
+- `test_add_recipe_ingredient_unit_too_long` — unit of 33 chars should fail (`max = 32`)
+- `test_add_recipe_source_url_empty_string` — `source_url: Some("".to_string())` should fail (URL validator rejects empty strings; documents the behaviour of `Option<String>` + `#[validate(url)]`)
+
+---
+
+### 32. [ ] Auth / Session Tests
+
+**Actions:**
+
+- `test_logout_invalidates_session` — log in, POST `/logout`, assert a subsequent authenticated request redirects to `/login` (session cookie is no longer valid)
+
+---
+
+### 33. [ ] Missing API Integration Tests
+
+**Context:** Several handlers have no direct integration-test coverage.
+
+**Actions:**
+
+- `test_delete_meal_entry_direct` — POST a meal entry, DELETE it via `DELETE /calendar/entries` with the entry id, assert the range query returns empty (tests the handler directly, not just via cascade)
+- `test_get_calendar_entries_invalid_range` — GET `/calendar/entries?start=2026-05-07&end=2026-05-01` (start after end), assert `500` or `400` and pin the status code
+- `test_body_size_limit` — POST `/recipes` with a body larger than 64 KB, assert `413 Payload Too Large`
+- `test_index_route_smoke` — authenticated GET `/` returns `200`
+- `test_404_fallback` — authenticated GET `/does-not-exist` returns `404`
+
+---
+
+### 34. [ ] Shopping List Unit Distinction Test
+
+**Context:** The shopping list merges ingredients with the same `(name, unit)`. Ingredients with the same name but different units (e.g. "Flour g" vs "Flour oz") must stay as separate entries. This is not currently tested.
+
+**Actions:**
+
+- `test_get_shopping_list_same_name_different_unit` — plan two meals with "Flour 200g" and "Flour 8oz"; assert the shopping list returns two entries (not one merged entry)
+- Note: add this test only after item 27 (multiple entries per slot) is implemented if the test needs two entries on the same date+slot; otherwise it can be added now using different slots
 
 ---
 
