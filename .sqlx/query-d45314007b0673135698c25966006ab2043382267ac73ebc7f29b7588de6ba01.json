@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, name, source_url, ingredients, instructions\n         FROM recipes WHERE user_id = ? ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "source_url",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "ingredients",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "instructions",
+        "ordinal": 4,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "d45314007b0673135698c25966006ab2043382267ac73ebc7f29b7588de6ba01"
+}

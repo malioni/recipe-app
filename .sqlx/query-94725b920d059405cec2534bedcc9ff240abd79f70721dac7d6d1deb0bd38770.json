@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT date, recipe_id FROM cooked_log\n         WHERE user_id = ? AND date >= ? AND date <= ?\n         ORDER BY date",
+  "describe": {
+    "columns": [
+      {
+        "name": "date",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "recipe_id",
+        "ordinal": 1,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "94725b920d059405cec2534bedcc9ff240abd79f70721dac7d6d1deb0bd38770"
+}
