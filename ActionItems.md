@@ -134,7 +134,7 @@ The following threat model should be kept in mind when making architectural deci
 
 ---
 
-### 28. [ ] GitHub Actions CI
+### 28. [x] GitHub Actions CI
 
 **Context:** Prerequisite for the agentic workflow (item 29). PRs should be blocked from merging until tests pass. Merge requires manual approval.
 
@@ -147,7 +147,7 @@ The following threat model should be kept in mind when making architectural deci
 
 ---
 
-### 29. [ ] Agentic Workflow (Plan → Implement → Test → Review → Merge)
+### 29. [x] Agentic Workflow (Plan → Implement → Test → Review → Merge)
 
 **Context:** Automates the path from a GitHub issue to a reviewed, tested PR. Human stays in the loop at two gates: approving the plan before implementation starts, and approving the PR before merge.
 
