@@ -415,3 +415,132 @@ async fn test_delete_recipe_cascades_to_meal_plan() {
     let entries: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
     assert!(entries.is_empty(), "Meal plan entries should be cascade-deleted with the recipe");
 }
+
+// ---------------------------------------------------------------------------
+// Multiple entries per slot — integration tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_multiple_entries_same_slot_api() {
+    let (app, _pool) = build_test_app().await;
+    let cookie = login(&app).await;
+
+    // Create two recipes
+    for name in ["Recipe A", "Recipe B"] {
+        app.clone()
+            .oneshot(json_req("POST", "/recipes", &cookie, serde_json::json!({
+                "name": name, "source_url": null, "ingredients": [], "instructions": []
+            })))
+            .await.unwrap();
+    }
+    let body = app.clone().oneshot(get_req("/recipes", &cookie)).await.unwrap()
+        .into_body().collect().await.unwrap().to_bytes();
+    let recipes: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    let id_a = recipes[0]["id"].as_i64().unwrap();
+    let id_b = recipes[1]["id"].as_i64().unwrap();
+
+    // Plan both to the same slot
+    for recipe_id in [id_a, id_b] {
+        let res = app.clone()
+            .oneshot(json_req("POST", "/calendar/entries", &cookie, serde_json::json!({
+                "date": "2026-07-01", "slot": "dinner", "recipe_id": recipe_id
+            })))
+            .await.unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+    }
+
+    // Both entries should be returned
+    let body = app.clone()
+        .oneshot(get_req("/calendar/entries?start=2026-07-01&end=2026-07-01", &cookie))
+        .await.unwrap()
+        .into_body().collect().await.unwrap().to_bytes();
+    let entries: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(entries.len(), 2, "Both entries should persist in the same slot");
+    assert!(entries.iter().all(|e| e["id"].as_i64().unwrap() > 0), "Each entry must have a non-zero id");
+}
+
+#[tokio::test]
+async fn test_delete_meal_entry_by_id_api() {
+    let (app, _pool) = build_test_app().await;
+    let cookie = login(&app).await;
+
+    // Create two recipes and plan both to the same slot
+    for name in ["Recipe X", "Recipe Y"] {
+        app.clone()
+            .oneshot(json_req("POST", "/recipes", &cookie, serde_json::json!({
+                "name": name, "source_url": null, "ingredients": [], "instructions": []
+            })))
+            .await.unwrap();
+    }
+    let body = app.clone().oneshot(get_req("/recipes", &cookie)).await.unwrap()
+        .into_body().collect().await.unwrap().to_bytes();
+    let recipes: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+
+    for r in &recipes {
+        app.clone()
+            .oneshot(json_req("POST", "/calendar/entries", &cookie, serde_json::json!({
+                "date": "2026-08-01", "slot": "lunch", "recipe_id": r["id"]
+            })))
+            .await.unwrap();
+    }
+
+    // Get both entries and capture their ids
+    let body = app.clone()
+        .oneshot(get_req("/calendar/entries?start=2026-08-01&end=2026-08-01", &cookie))
+        .await.unwrap()
+        .into_body().collect().await.unwrap().to_bytes();
+    let entries: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(entries.len(), 2);
+
+    let delete_id = entries[0]["id"].as_i64().unwrap();
+    let keep_recipe_id = entries[1]["recipe_id"].as_i64().unwrap();
+
+    // Delete only the first entry by id
+    let res = app.clone()
+        .oneshot(delete_req(&format!("/calendar/entries?id={}", delete_id), &cookie))
+        .await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Only the second entry should remain
+    let body = app.clone()
+        .oneshot(get_req("/calendar/entries?start=2026-08-01&end=2026-08-01", &cookie))
+        .await.unwrap()
+        .into_body().collect().await.unwrap().to_bytes();
+    let remaining: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(remaining.len(), 1, "Only the un-deleted entry should remain");
+    assert_eq!(remaining[0]["recipe_id"].as_i64().unwrap(), keep_recipe_id);
+}
+
+#[tokio::test]
+async fn test_slot_quota_rejected_api() {
+    let (app, _pool) = build_test_app().await;
+    let cookie = login(&app).await;
+
+    app.clone()
+        .oneshot(json_req("POST", "/recipes", &cookie, serde_json::json!({
+            "name": "Quota Recipe", "source_url": null, "ingredients": [], "instructions": []
+        })))
+        .await.unwrap();
+    let body = app.clone().oneshot(get_req("/recipes", &cookie)).await.unwrap()
+        .into_body().collect().await.unwrap().to_bytes();
+    let recipes: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    let recipe_id = recipes[0]["id"].as_i64().unwrap();
+
+    // Fill the slot to the production limit (3)
+    for _ in 0..3 {
+        let res = app.clone()
+            .oneshot(json_req("POST", "/calendar/entries", &cookie, serde_json::json!({
+                "date": "2026-09-01", "slot": "breakfast", "recipe_id": recipe_id
+            })))
+            .await.unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+    }
+
+    // The 4th should be rejected
+    let res = app.clone()
+        .oneshot(json_req("POST", "/calendar/entries", &cookie, serde_json::json!({
+            "date": "2026-09-01", "slot": "breakfast", "recipe_id": recipe_id
+        })))
+        .await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST, "4th entry in same slot should be rejected");
+}
