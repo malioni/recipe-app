@@ -75,11 +75,6 @@
       </form>
     </div>
 
-    <script>
-      // Show the error banner if the server redirected back with ?error=1
-      if (new URLSearchParams(window.location.search).get("error")) {
-        document.getElementById("error-msg").classList.remove("d-none");
-      }
-    </script>
+    <script src="/static/login.js"></script>
   </body>
 </html>
