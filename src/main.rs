@@ -49,16 +49,21 @@ async fn main() {
 
     tracing::info!("Connected to database");
 
-    // Run migrations. include_str! embeds the SQL at compile time so the
-    // migrations file must be present when building but not at runtime.
-    sqlx::query(include_str!("../migrations/001_initial.sql"))
-        .execute(&pool)
-        .await
-        .expect("Failed to run migration 001");
-    sqlx::query(include_str!("../migrations/002_multiple_entries_per_slot.sql"))
-        .execute(&pool)
-        .await
-        .expect("Failed to run migration 002");
+    // Ensure the migration tracking table exists before running any migrations.
+    // This table records which migrations have been applied so each one runs
+    // exactly once, making every migration idempotent regardless of its SQL.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS _schema_migrations (
+             version    TEXT PRIMARY KEY,
+             applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+         )"
+    )
+    .execute(&pool)
+    .await
+    .expect("Failed to create _schema_migrations table");
+
+    run_migration(&pool, "001", include_str!("../migrations/001_initial.sql")).await;
+    run_migration(&pool, "002", include_str!("../migrations/002_multiple_entries_per_slot.sql")).await;
 
     // Seed the initial user from environment variables if no users exist yet.
     // Set INITIAL_USERNAME and INITIAL_PASSWORD in your .env file before
@@ -138,6 +143,36 @@ async fn main() {
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .unwrap();
+}
+
+/// Runs a migration SQL string if it has not already been applied.
+///
+/// Checks `_schema_migrations` for `version` before executing; records the
+/// version after success. This makes every migration idempotent at the
+/// application level regardless of whether the SQL itself is idempotent.
+async fn run_migration(pool: &sqlx::SqlitePool, version: &str, sql: &str) {
+    let already_applied: Option<_> = sqlx::query(
+        "SELECT version FROM _schema_migrations WHERE version = ?"
+    )
+    .bind(version)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    if already_applied.is_none() {
+        sqlx::query(sql)
+            .execute(pool)
+            .await
+            .unwrap_or_else(|e| panic!("Failed to run migration {version}: {e}"));
+
+        sqlx::query("INSERT INTO _schema_migrations (version) VALUES (?)")
+            .bind(version)
+            .execute(pool)
+            .await
+            .unwrap_or_else(|e| panic!("Failed to record migration {version}: {e}"));
+
+        tracing::info!("Applied migration {version}");
+    }
 }
 
 async fn add_csp_header(request: Request<axum::body::Body>, next: Next) -> Response {

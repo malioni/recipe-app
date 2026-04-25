@@ -73,7 +73,7 @@ pub async fn plan_meal(
         return Err(format!("Slot limit of {} entries reached", MAX_ENTRIES_PER_SLOT));
     }
 
-    let entry = MealEntry { id: 0, date, slot, recipe_id };
+    let entry = MealEntry { id: None, date, slot, recipe_id };
     calendar_storage::add_meal_entry(pool, SINGLE_USER_ID, &entry).await
 }
 
@@ -256,7 +256,7 @@ mod tests {
         let date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
         plan_meal(&pool, date, MealSlot::Dinner, 1).await.unwrap();
         let meals = get_meals_in_range(&pool, date, date).await.unwrap();
-        let id = meals[0].id;
+        let id = meals[0].id.unwrap();
         remove_planned_meal(&pool, id).await.expect("Remove should succeed");
         let meals = get_meals_in_range(&pool, date, date).await.unwrap();
         assert!(meals.is_empty());

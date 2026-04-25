@@ -40,8 +40,7 @@ pub async fn load_meal_entries_in_range(
             let date = row.date.parse::<NaiveDate>()
                 .map_err(|e| format!("Failed to parse date '{}': {e}", row.date))?;
             let slot = parse_slot(&row.slot)?;
-            let id = row.id.ok_or_else(|| "meal_plan row missing id".to_string())?;
-            Ok(MealEntry { id, date, slot, recipe_id: row.recipe_id })
+            Ok(MealEntry { id: row.id, date, slot, recipe_id: row.recipe_id })
         })
         .collect()
 }
@@ -218,7 +217,7 @@ mod tests {
     async fn test_add_and_load_meal_entry() {
         let pool = setup().await;
         let entry = MealEntry {
-            id: 0,
+            id: None,
             date: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
             slot: MealSlot::Lunch,
             recipe_id: 1,
@@ -242,8 +241,8 @@ mod tests {
             .execute(&pool).await.unwrap();
 
         let date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
-        let entry1 = MealEntry { id: 0, date, slot: MealSlot::Dinner, recipe_id: 1 };
-        let entry2 = MealEntry { id: 0, date, slot: MealSlot::Dinner, recipe_id: 2 };
+        let entry1 = MealEntry { id: None, date, slot: MealSlot::Dinner, recipe_id: 1 };
+        let entry2 = MealEntry { id: None, date, slot: MealSlot::Dinner, recipe_id: 2 };
 
         add_meal_entry(&pool, 1, &entry1).await.unwrap();
         add_meal_entry(&pool, 1, &entry2).await.unwrap();
@@ -277,10 +276,10 @@ mod tests {
     async fn test_delete_meal_entry() {
         let pool = setup().await;
         let date = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
-        let entry = MealEntry { id: 0, date, slot: MealSlot::Breakfast, recipe_id: 1 };
+        let entry = MealEntry { id: None, date, slot: MealSlot::Breakfast, recipe_id: 1 };
         add_meal_entry(&pool, 1, &entry).await.unwrap();
         let loaded = load_meal_entries_in_range(&pool, 1, date, date).await.unwrap();
-        let id = loaded[0].id;
+        let id = loaded[0].id.unwrap();
         delete_meal_entry(&pool, 1, id).await.expect("Should delete successfully");
         let loaded = load_meal_entries_in_range(&pool, 1, date, date).await.unwrap();
         assert!(loaded.is_empty());
@@ -300,14 +299,14 @@ mod tests {
             .execute(&pool).await.unwrap();
 
         let date = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
-        add_meal_entry(&pool, 1, &MealEntry { id: 0, date, slot: MealSlot::Lunch, recipe_id: 1 }).await.unwrap();
-        add_meal_entry(&pool, 1, &MealEntry { id: 0, date, slot: MealSlot::Lunch, recipe_id: 2 }).await.unwrap();
+        add_meal_entry(&pool, 1, &MealEntry { id: None, date, slot: MealSlot::Lunch, recipe_id: 1 }).await.unwrap();
+        add_meal_entry(&pool, 1, &MealEntry { id: None, date, slot: MealSlot::Lunch, recipe_id: 2 }).await.unwrap();
 
         let loaded = load_meal_entries_in_range(&pool, 1, date, date).await.unwrap();
         assert_eq!(loaded.len(), 2);
 
         // Delete only the first entry by id
-        delete_meal_entry(&pool, 1, loaded[0].id).await.unwrap();
+        delete_meal_entry(&pool, 1, loaded[0].id.unwrap()).await.unwrap();
 
         let remaining = load_meal_entries_in_range(&pool, 1, date, date).await.unwrap();
         assert_eq!(remaining.len(), 1);
@@ -318,13 +317,13 @@ mod tests {
     async fn test_load_meal_entries_excludes_out_of_range() {
         let pool = setup().await;
         let in_range = MealEntry {
-            id: 0,
+            id: None,
             date: NaiveDate::from_ymd_opt(2026, 6, 15).unwrap(),
             slot: MealSlot::Lunch,
             recipe_id: 1,
         };
         let out_of_range = MealEntry {
-            id: 0,
+            id: None,
             date: NaiveDate::from_ymd_opt(2026, 7, 1).unwrap(),
             slot: MealSlot::Lunch,
             recipe_id: 1,

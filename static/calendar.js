@@ -165,7 +165,8 @@ function renderGrid() {
         );
       });
 
-      // "+" button — hidden once the slot is full (max 3 entries)
+      // "+" button — hidden once the slot is full.
+      // Must match MAX_ENTRIES_PER_SLOT in src/calendar_manager.rs.
       if (entries.length < 3) {
         const addBtn = document.createElement("button");
         addBtn.className = "add-meal-btn";
