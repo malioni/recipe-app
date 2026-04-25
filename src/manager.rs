@@ -92,6 +92,8 @@ mod tests {
         let pool = SqlitePool::connect(":memory:").await.unwrap();
         sqlx::query(include_str!("../migrations/001_initial.sql"))
             .execute(&pool).await.unwrap();
+        sqlx::query(include_str!("../migrations/002_multiple_entries_per_slot.sql"))
+            .execute(&pool).await.unwrap();
         sqlx::query(
             "INSERT INTO users (id, username, password_hash) VALUES (1, 'test', 'placeholder')"
         )

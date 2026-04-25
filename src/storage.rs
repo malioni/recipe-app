@@ -203,6 +203,69 @@ pub async fn delete_recipe(pool: &SqlitePool, id: i64) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
+// Schema migrations
+// ---------------------------------------------------------------------------
+
+/// Creates the `_schema_migrations` tracking table if it does not already exist.
+///
+/// Must be called once at startup before any call to `is_migration_applied` or
+/// `record_migration`. Uses `CREATE TABLE IF NOT EXISTS` so it is safe to call
+/// on every boot.
+///
+/// # Errors
+///
+/// Returns `Err` if the query fails.
+pub async fn ensure_migrations_table(pool: &SqlitePool) -> Result<(), String> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS _schema_migrations (
+             version    TEXT PRIMARY KEY,
+             applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+         )",
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to create _schema_migrations table: {e}"))?;
+
+    Ok(())
+}
+
+/// Returns `true` if the given migration version has already been recorded in
+/// `_schema_migrations`.
+///
+/// Call `ensure_migrations_table` before this function.
+///
+/// # Errors
+///
+/// Returns `Err` if the query fails.
+pub async fn is_migration_applied(pool: &SqlitePool, version: &str) -> Result<bool, String> {
+    let row = sqlx::query("SELECT version FROM _schema_migrations WHERE version = ?")
+        .bind(version)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Failed to check migration {version}: {e}"))?;
+
+    Ok(row.is_some())
+}
+
+/// Records a migration version in `_schema_migrations` after it has been applied.
+///
+/// Returns `Err` if the version is already recorded (PRIMARY KEY violation) or
+/// the query otherwise fails.
+///
+/// # Errors
+///
+/// Returns `Err` if the query fails.
+pub async fn record_migration(pool: &SqlitePool, version: &str) -> Result<(), String> {
+    sqlx::query("INSERT INTO _schema_migrations (version) VALUES (?)")
+        .bind(version)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to record migration {version}: {e}"))?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
 
@@ -229,9 +292,9 @@ mod tests {
             .await
             .expect("Failed to create in-memory database");
         sqlx::query(include_str!("../migrations/001_initial.sql"))
-            .execute(&pool)
-            .await
-            .expect("Failed to run migrations");
+            .execute(&pool).await.expect("Failed to run migration 001");
+        sqlx::query(include_str!("../migrations/002_multiple_entries_per_slot.sql"))
+            .execute(&pool).await.expect("Failed to run migration 002");
         sqlx::query(
             "INSERT INTO users (id, username, password_hash) VALUES (1, 'test', 'placeholder')"
         )
@@ -251,6 +314,8 @@ mod tests {
     async fn test_any_users_exist_false() {
         let pool = SqlitePool::connect(":memory:").await.unwrap();
         sqlx::query(include_str!("../migrations/001_initial.sql"))
+            .execute(&pool).await.unwrap();
+        sqlx::query(include_str!("../migrations/002_multiple_entries_per_slot.sql"))
             .execute(&pool).await.unwrap();
         assert!(!any_users_exist(&pool).await.unwrap());
     }
@@ -347,6 +412,8 @@ mod tests {
         let pool = SqlitePool::connect(":memory:").await.unwrap();
         sqlx::query(include_str!("../migrations/001_initial.sql"))
             .execute(&pool).await.unwrap();
+        sqlx::query(include_str!("../migrations/002_multiple_entries_per_slot.sql"))
+            .execute(&pool).await.unwrap();
         let id = create_user(&pool, "alice", "hash123").await.expect("Failed to create user");
         assert!(id > 0);
         let user = load_user_by_username(&pool, "alice").await.unwrap().unwrap();
@@ -414,5 +481,38 @@ mod tests {
         // ORDER BY id means insertion order is preserved
         assert_eq!(recipes[0].name, "Zucchini Soup");
         assert_eq!(recipes[2].name, "Bread");
+    }
+
+    // -------------------------------------------------------------------------
+    // Migration tracking tests (bare pool — no app schema needed)
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_ensure_migrations_table_is_idempotent() {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        ensure_migrations_table(&pool).await.expect("first call should succeed");
+        ensure_migrations_table(&pool).await.expect("second call should be a no-op");
+    }
+
+    #[tokio::test]
+    async fn test_migration_tracking_lifecycle() {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        ensure_migrations_table(&pool).await.unwrap();
+
+        // Before recording: not applied
+        assert!(!is_migration_applied(&pool, "001").await.unwrap());
+
+        // Record and verify
+        record_migration(&pool, "001").await.expect("first record should succeed");
+        assert!(is_migration_applied(&pool, "001").await.unwrap());
+
+        // Double-recording violates PRIMARY KEY — must return Err
+        assert!(
+            record_migration(&pool, "001").await.is_err(),
+            "recording the same version twice should fail"
+        );
+
+        // Other versions are unaffected
+        assert!(!is_migration_applied(&pool, "002").await.unwrap());
     }
 }

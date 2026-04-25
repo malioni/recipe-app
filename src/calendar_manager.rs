@@ -16,6 +16,12 @@ const MAX_MEAL_PLAN_ENTRIES: usize = 1000;
 #[cfg(test)]
 const MAX_MEAL_PLAN_ENTRIES: usize = 3;
 
+/// Maximum number of entries allowed per (user, date, slot) combination.
+#[cfg(not(test))]
+const MAX_ENTRIES_PER_SLOT: usize = 3;
+#[cfg(test)]
+const MAX_ENTRIES_PER_SLOT: usize = 2;
+
 // ---------------------------------------------------------------------------
 // Meal plan
 // ---------------------------------------------------------------------------
@@ -36,11 +42,11 @@ pub async fn get_meals_in_range(
 
 /// Plans a recipe for a specific date and slot.
 ///
-/// If a recipe is already planned for that slot it is silently replaced.
+/// Multiple entries per slot are allowed up to `MAX_ENTRIES_PER_SLOT`.
 ///
 /// # Errors
 ///
-/// Returns `Err` if the recipe ID does not exist or the query fails.
+/// Returns `Err` if the recipe ID does not exist, a quota is exceeded, or the query fails.
 pub async fn plan_meal(
     pool: &SqlitePool,
     date: NaiveDate,
@@ -61,21 +67,25 @@ pub async fn plan_meal(
         return Err(format!("Meal plan limit of {} entries reached", MAX_MEAL_PLAN_ENTRIES));
     }
 
-    let entry = MealEntry { date, slot, recipe_id };
+    // Enforce per-slot limit.
+    let slot_count = calendar_storage::count_slot_entries(pool, SINGLE_USER_ID, date, &slot).await?;
+    if slot_count >= MAX_ENTRIES_PER_SLOT {
+        return Err(format!("Slot limit of {} entries reached", MAX_ENTRIES_PER_SLOT));
+    }
+
+    let entry = MealEntry { id: None, date, slot, recipe_id };
     calendar_storage::add_meal_entry(pool, SINGLE_USER_ID, &entry).await
 }
 
-/// Removes the planned meal at the given date and slot.
+/// Removes a planned meal entry by its primary key.
+///
+/// Deleting a non-existent id is a no-op — idempotent by design.
 ///
 /// # Errors
 ///
-/// Returns `Err` if no entry exists for that date and slot, or the query fails.
-pub async fn remove_planned_meal(
-    pool: &SqlitePool,
-    date: NaiveDate,
-    slot: MealSlot,
-) -> Result<(), String> {
-    calendar_storage::delete_meal_entry(pool, SINGLE_USER_ID, date, slot).await
+/// Returns `Err` if the query fails.
+pub async fn remove_planned_meal(pool: &SqlitePool, id: i64) -> Result<(), String> {
+    calendar_storage::delete_meal_entry(pool, SINGLE_USER_ID, id).await
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +196,8 @@ mod tests {
         let pool = SqlitePool::connect(":memory:").await.unwrap();
         sqlx::query(include_str!("../migrations/001_initial.sql"))
             .execute(&pool).await.unwrap();
+        sqlx::query(include_str!("../migrations/002_multiple_entries_per_slot.sql"))
+            .execute(&pool).await.unwrap();
         sqlx::query(
             "INSERT INTO users (id, username, password_hash) VALUES (1, 'test', 'placeholder')"
         )
@@ -243,7 +255,9 @@ mod tests {
         let pool = setup().await;
         let date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
         plan_meal(&pool, date, MealSlot::Dinner, 1).await.unwrap();
-        remove_planned_meal(&pool, date, MealSlot::Dinner).await.expect("Remove should succeed");
+        let meals = get_meals_in_range(&pool, date, date).await.unwrap();
+        let id = meals[0].id.unwrap();
+        remove_planned_meal(&pool, id).await.expect("Remove should succeed");
         let meals = get_meals_in_range(&pool, date, date).await.unwrap();
         assert!(meals.is_empty());
     }
@@ -251,9 +265,8 @@ mod tests {
     #[tokio::test]
     async fn test_remove_planned_meal_not_found() {
         let pool = setup().await;
-        let date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
-        // Removing a non-existent entry is a no-op — idempotent by design.
-        assert!(remove_planned_meal(&pool, date, MealSlot::Breakfast).await.is_ok());
+        // Removing a non-existent id is a no-op — idempotent by design.
+        assert!(remove_planned_meal(&pool, 999_999).await.is_ok());
     }
 
     #[tokio::test]
@@ -317,6 +330,19 @@ mod tests {
         }
         let overflow_date = last_date + chrono::Duration::days(1);
         let result = plan_meal(&pool, overflow_date, MealSlot::Breakfast, 1).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("limit"));
+    }
+
+    #[tokio::test]
+    async fn test_slot_quota_enforced() {
+        let pool = setup().await;
+        let date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+        for _ in 0..MAX_ENTRIES_PER_SLOT {
+            plan_meal(&pool, date, MealSlot::Dinner, 1).await
+                .expect("should succeed within slot quota");
+        }
+        let result = plan_meal(&pool, date, MealSlot::Dinner, 1).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("limit"));
     }

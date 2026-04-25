@@ -49,12 +49,15 @@ async fn main() {
 
     tracing::info!("Connected to database");
 
-    // Run migrations. include_str! embeds the SQL at compile time so the
-    // migrations file must be present when building but not at runtime.
-    sqlx::query(include_str!("../migrations/001_initial.sql"))
-        .execute(&pool)
+    // Ensure the migration tracking table exists before running any migrations.
+    // This table records which migrations have been applied so each one runs
+    // exactly once, making every migration idempotent regardless of its SQL.
+    storage::ensure_migrations_table(&pool)
         .await
-        .expect("Failed to run migrations");
+        .expect("Failed to create _schema_migrations table");
+
+    run_migration(&pool, "001", include_str!("../migrations/001_initial.sql")).await;
+    run_migration(&pool, "002", include_str!("../migrations/002_multiple_entries_per_slot.sql")).await;
 
     // Seed the initial user from environment variables if no users exist yet.
     // Set INITIAL_USERNAME and INITIAL_PASSWORD in your .env file before
@@ -134,6 +137,30 @@ async fn main() {
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .unwrap();
+}
+
+/// Runs a migration SQL string if it has not already been applied.
+///
+/// Delegates the tracking-table checks to `storage` so that all SQL stays
+/// within the storage layer. This makes every migration idempotent at the
+/// application level regardless of whether the SQL itself is idempotent.
+async fn run_migration(pool: &sqlx::SqlitePool, version: &str, sql: &str) {
+    let already_applied = storage::is_migration_applied(pool, version)
+        .await
+        .unwrap_or_else(|e| panic!("Failed to check migration {version}: {e}"));
+
+    if !already_applied {
+        sqlx::query(sql)
+            .execute(pool)
+            .await
+            .unwrap_or_else(|e| panic!("Failed to run migration {version}: {e}"));
+
+        storage::record_migration(pool, version)
+            .await
+            .unwrap_or_else(|e| panic!("Failed to record migration {version}: {e}"));
+
+        tracing::info!("Applied migration {version}");
+    }
 }
 
 async fn add_csp_header(request: Request<axum::body::Body>, next: Next) -> Response {

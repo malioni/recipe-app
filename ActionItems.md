@@ -22,7 +22,7 @@ The following threat model should be kept in mind when making architectural deci
 
 ## Phase 2 — Soon (Correctness & Robustness)
 
-### 27. [ ] Allow Multiple Entries Per Slot
+### 27. [x] Allow Multiple Entries Per Slot
 
 **Context:** Currently `meal_plan` has `UNIQUE(user_id, date, slot)` enforced at the DB level, and `add_meal_entry` uses `INSERT OR REPLACE`. This means only one recipe per slot per day. The intended model is multiple entries per slot (main dish + salad + dessert all at dinner, for example).
 

@@ -103,7 +103,8 @@ async function loadWeek() {
     const entries = await planRes.json();
     entries.forEach((e) => {
       if (!calendarData[e.date]) calendarData[e.date] = {};
-      calendarData[e.date][e.slot] = e;
+      if (!calendarData[e.date][e.slot]) calendarData[e.date][e.slot] = [];
+      calendarData[e.date][e.slot].push(e);
     });
   }
 
@@ -153,23 +154,26 @@ function renderGrid() {
         `cell${isToday(d) ? " today-col" : ""}`,
         ""
       );
-      const entry = calendarData[dateStr]?.[slot];
+      const entries = calendarData[dateStr]?.[slot] ?? [];
 
-      if (entry) {
+      entries.forEach((entry) => {
         const recipe = allRecipes.find((r) => r.id === entry.recipe_id);
         const name = recipe ? recipe.name : `Recipe #${entry.recipe_id}`;
         const cooked = !!cookedData[`${dateStr}-${entry.recipe_id}`];
         cell.appendChild(
-          makeMealChip(name, dateStr, slot, entry.recipe_id, cooked)
+          makeMealChip(name, entry.id, dateStr, entry.recipe_id, cooked)
         );
-      }
+      });
 
-      // "+" button to add/replace
-      const addBtn = document.createElement("button");
-      addBtn.className = "add-meal-btn";
-      addBtn.innerHTML = `<i class="bi bi-plus"></i> add`;
-      addBtn.onclick = () => openPickModal(dateStr, slot);
-      cell.appendChild(addBtn);
+      // "+" button — hidden once the slot is full.
+      // Must match MAX_ENTRIES_PER_SLOT in src/calendar_manager.rs.
+      if (entries.length < 3) {
+        const addBtn = document.createElement("button");
+        addBtn.className = "add-meal-btn";
+        addBtn.innerHTML = `<i class="bi bi-plus"></i> add`;
+        addBtn.onclick = () => openPickModal(dateStr, slot);
+        cell.appendChild(addBtn);
+      }
     });
   });
 }
@@ -182,7 +186,7 @@ function appendCell(grid, className, text) {
   return cell;
 }
 
-function makeMealChip(name, date, slot, recipeId, cooked) {
+function makeMealChip(name, entryId, date, recipeId, cooked) {
   const chip = document.createElement("div");
   chip.className = `meal-chip${cooked ? " cooked" : ""}`;
 
@@ -211,7 +215,7 @@ function makeMealChip(name, date, slot, recipeId, cooked) {
   removeBtn.title = "Remove";
   removeBtn.innerHTML = `<i class="bi bi-x"></i>`;
   removeBtn.addEventListener("click", function () {
-    removeMeal(date, slot);
+    removeMeal(entryId);
   });
   actions.appendChild(removeBtn);
 
@@ -279,9 +283,9 @@ async function planMeal(date, slot, recipeId) {
   }
 }
 
-async function removeMeal(date, slot) {
+async function removeMeal(entryId) {
   try {
-    const res = await fetch(`/calendar/entries?date=${date}&slot=${slot}`, {
+    const res = await fetch(`/calendar/entries?id=${entryId}`, {
       method: "DELETE",
     });
     if (!res.ok) throw new Error(await res.text());

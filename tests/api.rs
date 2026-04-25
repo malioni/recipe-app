@@ -43,9 +43,9 @@ use tower_sessions_sqlx_store::SqliteStore;
 async fn build_test_app() -> (Router, SqlitePool) {
     let pool = SqlitePool::connect(":memory:").await.unwrap();
     sqlx::query(include_str!("../migrations/001_initial.sql"))
-        .execute(&pool)
-        .await
-        .unwrap();
+        .execute(&pool).await.unwrap();
+    sqlx::query(include_str!("../migrations/002_multiple_entries_per_slot.sql"))
+        .execute(&pool).await.unwrap();
 
     let hash = auth::hash_password("password").unwrap();
     storage::create_user(&pool, "admin", &hash).await.unwrap();
@@ -414,4 +414,186 @@ async fn test_delete_recipe_cascades_to_meal_plan() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let entries: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
     assert!(entries.is_empty(), "Meal plan entries should be cascade-deleted with the recipe");
+}
+
+// ---------------------------------------------------------------------------
+// Multiple entries per slot — integration tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_multiple_entries_same_slot_api() {
+    let (app, _pool) = build_test_app().await;
+    let cookie = login(&app).await;
+
+    // Create two recipes
+    for name in ["Recipe A", "Recipe B"] {
+        app.clone()
+            .oneshot(json_req("POST", "/recipes", &cookie, serde_json::json!({
+                "name": name, "source_url": null, "ingredients": [], "instructions": []
+            })))
+            .await.unwrap();
+    }
+    let body = app.clone().oneshot(get_req("/recipes", &cookie)).await.unwrap()
+        .into_body().collect().await.unwrap().to_bytes();
+    let recipes: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    let id_a = recipes[0]["id"].as_i64().unwrap();
+    let id_b = recipes[1]["id"].as_i64().unwrap();
+
+    // Plan both to the same slot
+    for recipe_id in [id_a, id_b] {
+        let res = app.clone()
+            .oneshot(json_req("POST", "/calendar/entries", &cookie, serde_json::json!({
+                "date": "2026-07-01", "slot": "dinner", "recipe_id": recipe_id
+            })))
+            .await.unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+    }
+
+    // Both entries should be returned
+    let body = app.clone()
+        .oneshot(get_req("/calendar/entries?start=2026-07-01&end=2026-07-01", &cookie))
+        .await.unwrap()
+        .into_body().collect().await.unwrap().to_bytes();
+    let entries: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(entries.len(), 2, "Both entries should persist in the same slot");
+    assert!(entries.iter().all(|e| e["id"].as_i64().unwrap() > 0), "Each entry must have a non-zero id");
+}
+
+#[tokio::test]
+async fn test_delete_meal_entry_by_id_api() {
+    let (app, _pool) = build_test_app().await;
+    let cookie = login(&app).await;
+
+    // Create two recipes and plan both to the same slot
+    for name in ["Recipe X", "Recipe Y"] {
+        app.clone()
+            .oneshot(json_req("POST", "/recipes", &cookie, serde_json::json!({
+                "name": name, "source_url": null, "ingredients": [], "instructions": []
+            })))
+            .await.unwrap();
+    }
+    let body = app.clone().oneshot(get_req("/recipes", &cookie)).await.unwrap()
+        .into_body().collect().await.unwrap().to_bytes();
+    let recipes: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+
+    for r in &recipes {
+        app.clone()
+            .oneshot(json_req("POST", "/calendar/entries", &cookie, serde_json::json!({
+                "date": "2026-08-01", "slot": "lunch", "recipe_id": r["id"]
+            })))
+            .await.unwrap();
+    }
+
+    // Get both entries and capture their ids
+    let body = app.clone()
+        .oneshot(get_req("/calendar/entries?start=2026-08-01&end=2026-08-01", &cookie))
+        .await.unwrap()
+        .into_body().collect().await.unwrap().to_bytes();
+    let entries: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(entries.len(), 2);
+
+    let delete_id = entries[0]["id"].as_i64().unwrap();
+    let keep_recipe_id = entries[1]["recipe_id"].as_i64().unwrap();
+
+    // Delete only the first entry by id
+    let res = app.clone()
+        .oneshot(delete_req(&format!("/calendar/entries?id={}", delete_id), &cookie))
+        .await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Only the second entry should remain
+    let body = app.clone()
+        .oneshot(get_req("/calendar/entries?start=2026-08-01&end=2026-08-01", &cookie))
+        .await.unwrap()
+        .into_body().collect().await.unwrap().to_bytes();
+    let remaining: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(remaining.len(), 1, "Only the un-deleted entry should remain");
+    assert_eq!(remaining[0]["recipe_id"].as_i64().unwrap(), keep_recipe_id);
+}
+
+#[tokio::test]
+async fn test_slot_quota_rejected_api() {
+    let (app, _pool) = build_test_app().await;
+    let cookie = login(&app).await;
+
+    app.clone()
+        .oneshot(json_req("POST", "/recipes", &cookie, serde_json::json!({
+            "name": "Quota Recipe", "source_url": null, "ingredients": [], "instructions": []
+        })))
+        .await.unwrap();
+    let body = app.clone().oneshot(get_req("/recipes", &cookie)).await.unwrap()
+        .into_body().collect().await.unwrap().to_bytes();
+    let recipes: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    let recipe_id = recipes[0]["id"].as_i64().unwrap();
+
+    // Fill the slot to the production limit (3)
+    for _ in 0..3 {
+        let res = app.clone()
+            .oneshot(json_req("POST", "/calendar/entries", &cookie, serde_json::json!({
+                "date": "2026-09-01", "slot": "breakfast", "recipe_id": recipe_id
+            })))
+            .await.unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+    }
+
+    // The 4th should be rejected
+    let res = app.clone()
+        .oneshot(json_req("POST", "/calendar/entries", &cookie, serde_json::json!({
+            "date": "2026-09-01", "slot": "breakfast", "recipe_id": recipe_id
+        })))
+        .await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST, "4th entry in same slot should be rejected");
+}
+
+// ---------------------------------------------------------------------------
+// Migration tracking tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_migration_idempotent() {
+    // Use a bare pool so we can observe the full migration sequence.
+    let pool = SqlitePool::connect(":memory:").await.unwrap();
+
+    // Helper: simulate the startup sequence exactly as main.rs does it.
+    let run_sequence = |pool: &SqlitePool| {
+        let pool = pool.clone();
+        async move {
+            storage::ensure_migrations_table(&pool).await.expect("ensure_migrations_table");
+            for (version, sql) in [
+                ("001", include_str!("../migrations/001_initial.sql")),
+                ("002", include_str!("../migrations/002_multiple_entries_per_slot.sql")),
+            ] {
+                if !storage::is_migration_applied(&pool, version).await.expect("is_migration_applied") {
+                    sqlx::query(sql).execute(&pool).await.expect("run migration sql");
+                    storage::record_migration(&pool, version).await.expect("record_migration");
+                }
+            }
+        }
+    };
+
+    // First pass: applies both migrations.
+    run_sequence(&pool).await;
+
+    // Seed data so we can verify the table isn't wiped on second pass.
+    sqlx::query(
+        "INSERT INTO users (id, username, password_hash) VALUES (1, 'u', 'h')"
+    ).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO recipes (id, user_id, name, ingredients, instructions) VALUES (1, 1, 'R', '[]', '[]')"
+    ).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO meal_plan (user_id, date, slot, recipe_id) VALUES (1, '2026-01-01', 'lunch', 1)"
+    ).execute(&pool).await.unwrap();
+
+    let count_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM meal_plan")
+        .fetch_one(&pool).await.unwrap();
+
+    // Second pass: all migrations already applied — must be a complete no-op.
+    run_sequence(&pool).await;
+
+    let count_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM meal_plan")
+        .fetch_one(&pool).await.unwrap();
+
+    assert_eq!(count_before, count_after, "second migration pass must not alter meal_plan data");
+    assert_eq!(count_after, 1);
 }
