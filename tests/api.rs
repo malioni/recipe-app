@@ -544,3 +544,56 @@ async fn test_slot_quota_rejected_api() {
         .await.unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST, "4th entry in same slot should be rejected");
 }
+
+// ---------------------------------------------------------------------------
+// Migration tracking tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_migration_idempotent() {
+    // Use a bare pool so we can observe the full migration sequence.
+    let pool = SqlitePool::connect(":memory:").await.unwrap();
+
+    // Helper: simulate the startup sequence exactly as main.rs does it.
+    let run_sequence = |pool: &SqlitePool| {
+        let pool = pool.clone();
+        async move {
+            storage::ensure_migrations_table(&pool).await.expect("ensure_migrations_table");
+            for (version, sql) in [
+                ("001", include_str!("../migrations/001_initial.sql")),
+                ("002", include_str!("../migrations/002_multiple_entries_per_slot.sql")),
+            ] {
+                if !storage::is_migration_applied(&pool, version).await.expect("is_migration_applied") {
+                    sqlx::query(sql).execute(&pool).await.expect("run migration sql");
+                    storage::record_migration(&pool, version).await.expect("record_migration");
+                }
+            }
+        }
+    };
+
+    // First pass: applies both migrations.
+    run_sequence(&pool).await;
+
+    // Seed data so we can verify the table isn't wiped on second pass.
+    sqlx::query(
+        "INSERT INTO users (id, username, password_hash) VALUES (1, 'u', 'h')"
+    ).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO recipes (id, user_id, name, ingredients, instructions) VALUES (1, 1, 'R', '[]', '[]')"
+    ).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO meal_plan (user_id, date, slot, recipe_id) VALUES (1, '2026-01-01', 'lunch', 1)"
+    ).execute(&pool).await.unwrap();
+
+    let count_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM meal_plan")
+        .fetch_one(&pool).await.unwrap();
+
+    // Second pass: all migrations already applied — must be a complete no-op.
+    run_sequence(&pool).await;
+
+    let count_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM meal_plan")
+        .fetch_one(&pool).await.unwrap();
+
+    assert_eq!(count_before, count_after, "second migration pass must not alter meal_plan data");
+    assert_eq!(count_after, 1);
+}

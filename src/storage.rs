@@ -482,4 +482,37 @@ mod tests {
         assert_eq!(recipes[0].name, "Zucchini Soup");
         assert_eq!(recipes[2].name, "Bread");
     }
+
+    // -------------------------------------------------------------------------
+    // Migration tracking tests (bare pool — no app schema needed)
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_ensure_migrations_table_is_idempotent() {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        ensure_migrations_table(&pool).await.expect("first call should succeed");
+        ensure_migrations_table(&pool).await.expect("second call should be a no-op");
+    }
+
+    #[tokio::test]
+    async fn test_migration_tracking_lifecycle() {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        ensure_migrations_table(&pool).await.unwrap();
+
+        // Before recording: not applied
+        assert!(!is_migration_applied(&pool, "001").await.unwrap());
+
+        // Record and verify
+        record_migration(&pool, "001").await.expect("first record should succeed");
+        assert!(is_migration_applied(&pool, "001").await.unwrap());
+
+        // Double-recording violates PRIMARY KEY — must return Err
+        assert!(
+            record_migration(&pool, "001").await.is_err(),
+            "recording the same version twice should fail"
+        );
+
+        // Other versions are unaffected
+        assert!(!is_migration_applied(&pool, "002").await.unwrap());
+    }
 }
