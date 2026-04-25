@@ -43,9 +43,9 @@ use tower_sessions_sqlx_store::SqliteStore;
 async fn build_test_app() -> (Router, SqlitePool) {
     let pool = SqlitePool::connect(":memory:").await.unwrap();
     sqlx::query(include_str!("../migrations/001_initial.sql"))
-        .execute(&pool)
-        .await
-        .unwrap();
+        .execute(&pool).await.unwrap();
+    sqlx::query(include_str!("../migrations/002_multiple_entries_per_slot.sql"))
+        .execute(&pool).await.unwrap();
 
     let hash = auth::hash_password("password").unwrap();
     storage::create_user(&pool, "admin", &hash).await.unwrap();

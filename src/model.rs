@@ -53,6 +53,10 @@ impl std::fmt::Display for MealSlot {
 /// A planned meal: a recipe assigned to a specific date and slot.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct MealEntry {
+    /// Primary key. Defaults to 0 when omitted from POST bodies; populated
+    /// from the database on reads.
+    #[serde(default)]
+    pub id: i64,
     /// Date serialized as "YYYY-MM-DD" in JSON.
     pub date: NaiveDate,
     pub slot: MealSlot,

@@ -54,7 +54,11 @@ async fn main() {
     sqlx::query(include_str!("../migrations/001_initial.sql"))
         .execute(&pool)
         .await
-        .expect("Failed to run migrations");
+        .expect("Failed to run migration 001");
+    sqlx::query(include_str!("../migrations/002_multiple_entries_per_slot.sql"))
+        .execute(&pool)
+        .await
+        .expect("Failed to run migration 002");
 
     // Seed the initial user from environment variables if no users exist yet.
     // Set INITIAL_USERNAME and INITIAL_PASSWORD in your .env file before

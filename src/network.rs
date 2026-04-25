@@ -12,7 +12,7 @@ use tower_sessions::Session;
 use crate::auth::{self, AuthUser, SESSION_USER_ID_KEY};
 use crate::manager;
 use crate::calendar_manager;
-use crate::model::{LoginForm, MealEntry, CookedEntry, MealSlot, Recipe};
+use crate::model::{LoginForm, MealEntry, CookedEntry, Recipe};
 
 // ---------------------------------------------------------------------------
 // Auth handlers
@@ -200,11 +200,10 @@ pub struct DateRangeParams {
     pub end: NaiveDate,
 }
 
-/// Query params for deleting a planned meal: `?date=YYYY-MM-DD&slot=breakfast`
+/// Query params for deleting a planned meal: `?id=<entry_id>`
 #[derive(Deserialize)]
 pub struct DeleteMealParams {
-    pub date: NaiveDate,
-    pub slot: MealSlot,
+    pub id: i64,
 }
 
 // ---------------------------------------------------------------------------
@@ -258,13 +257,13 @@ pub async fn handle_plan_meal(
     }
 }
 
-/// DELETE /calendar/entries?date=YYYY-MM-DD&slot=breakfast
+/// DELETE /calendar/entries?id=<entry_id>
 pub async fn handle_delete_meal_entry(
     _auth: AuthUser,
     State(pool): State<SqlitePool>,
     Query(params): Query<DeleteMealParams>,
 ) -> impl IntoResponse {
-    match calendar_manager::remove_planned_meal(&pool, params.date, params.slot).await {
+    match calendar_manager::remove_planned_meal(&pool, params.id).await {
         Ok(_) => (StatusCode::OK, Json(serde_json::json!({ "status": "deleted" }))),
         Err(err_msg) => {
             tracing::error!("Error deleting meal entry: {err_msg}");
@@ -359,9 +358,9 @@ mod tests {
             .await
             .expect("Failed to create in-memory database");
         sqlx::query(include_str!("../migrations/001_initial.sql"))
-            .execute(&pool)
-            .await
-            .expect("Failed to run migrations");
+            .execute(&pool).await.expect("Failed to run migration 001");
+        sqlx::query(include_str!("../migrations/002_multiple_entries_per_slot.sql"))
+            .execute(&pool).await.expect("Failed to run migration 002");
         sqlx::query(
             "INSERT INTO users (id, username, password_hash) VALUES (1, 'test', 'placeholder')"
         )
