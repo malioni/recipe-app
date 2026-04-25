@@ -62,8 +62,8 @@
         <div id="ingredients-list"></div>
         <button
           type="button"
+          id="add-ingredient-btn"
           class="btn btn-sm btn-outline-primary mt-2"
-          onclick="addIngredient()"
         >
           + Add Ingredient
         </button>
@@ -75,15 +75,15 @@
         <div id="steps-list"></div>
         <button
           type="button"
+          id="add-step-btn"
           class="btn btn-sm btn-outline-primary mt-2"
-          onclick="addStep()"
         >
           + Add Step
         </button>
       </div>
 
       <!-- Submit -->
-      <button class="btn btn-success" onclick="submitRecipe()">
+      <button id="submit-btn" class="btn btn-success">
         Save Recipe
       </button>
     </div>
@@ -101,20 +101,48 @@
         const container = document.getElementById("ingredients-list");
         const row = document.createElement("div");
         row.className = "row g-2 mb-2 align-items-center";
-        row.innerHTML = `
-        <div class="col">
-          <input type="text" class="form-control" placeholder="Item" value="${item}">
-        </div>
-        <div class="col-3">
-          <input type="number" step="any" class="form-control" placeholder="Qty" value="${qty}">
-        </div>
-        <div class="col-3">
-          <input type="text" class="form-control" placeholder="Unit" value="${unit}">
-        </div>
-        <div class="col-auto">
-          <button type="button" class="btn btn-sm btn-danger" onclick="this.parentElement.parentElement.remove()">x</button>
-        </div>
-      `;
+
+        const colItem = document.createElement("div");
+        colItem.className = "col";
+        const inputItem = document.createElement("input");
+        inputItem.type = "text";
+        inputItem.className = "form-control";
+        inputItem.placeholder = "Item";
+        inputItem.value = item;
+        colItem.appendChild(inputItem);
+
+        const colQty = document.createElement("div");
+        colQty.className = "col-3";
+        const inputQty = document.createElement("input");
+        inputQty.type = "number";
+        inputQty.step = "any";
+        inputQty.className = "form-control";
+        inputQty.placeholder = "Qty";
+        inputQty.value = qty;
+        colQty.appendChild(inputQty);
+
+        const colUnit = document.createElement("div");
+        colUnit.className = "col-3";
+        const inputUnit = document.createElement("input");
+        inputUnit.type = "text";
+        inputUnit.className = "form-control";
+        inputUnit.placeholder = "Unit";
+        inputUnit.value = unit;
+        colUnit.appendChild(inputUnit);
+
+        const colBtn = document.createElement("div");
+        colBtn.className = "col-auto";
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.className = "btn btn-sm btn-danger";
+        removeBtn.textContent = "x";
+        removeBtn.addEventListener("click", () => row.remove());
+        colBtn.appendChild(removeBtn);
+
+        row.appendChild(colItem);
+        row.appendChild(colQty);
+        row.appendChild(colUnit);
+        row.appendChild(colBtn);
         container.appendChild(row);
       }
 
@@ -122,10 +150,21 @@
         const container = document.getElementById("steps-list");
         const row = document.createElement("div");
         row.className = "input-group mb-2";
-        row.innerHTML = `
-        <input type="text" class="form-control" placeholder="Step description" value="${text}">
-        <button type="button" class="btn btn-danger" onclick="this.parentElement.remove()">x</button>
-      `;
+
+        const input = document.createElement("input");
+        input.type = "text";
+        input.className = "form-control";
+        input.placeholder = "Step description";
+        input.value = text;
+
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.className = "btn btn-danger";
+        removeBtn.textContent = "x";
+        removeBtn.addEventListener("click", () => row.remove());
+
+        row.appendChild(input);
+        row.appendChild(removeBtn);
         container.appendChild(row);
       }
 
@@ -205,6 +244,10 @@
       // Initialise — detect edit mode from ?id= query param
       // ----------------------------------------------------------------
       window.addEventListener("DOMContentLoaded", async () => {
+        document.getElementById("add-ingredient-btn").addEventListener("click", () => addIngredient());
+        document.getElementById("add-step-btn").addEventListener("click", () => addStep());
+        document.getElementById("submit-btn").addEventListener("click", submitRecipe);
+
         const params = new URLSearchParams(window.location.search);
         const idParam = params.get("id");
 
