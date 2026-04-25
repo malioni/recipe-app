@@ -203,6 +203,69 @@ pub async fn delete_recipe(pool: &SqlitePool, id: i64) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
+// Schema migrations
+// ---------------------------------------------------------------------------
+
+/// Creates the `_schema_migrations` tracking table if it does not already exist.
+///
+/// Must be called once at startup before any call to `is_migration_applied` or
+/// `record_migration`. Uses `CREATE TABLE IF NOT EXISTS` so it is safe to call
+/// on every boot.
+///
+/// # Errors
+///
+/// Returns `Err` if the query fails.
+pub async fn ensure_migrations_table(pool: &SqlitePool) -> Result<(), String> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS _schema_migrations (
+             version    TEXT PRIMARY KEY,
+             applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+         )",
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to create _schema_migrations table: {e}"))?;
+
+    Ok(())
+}
+
+/// Returns `true` if the given migration version has already been recorded in
+/// `_schema_migrations`.
+///
+/// Call `ensure_migrations_table` before this function.
+///
+/// # Errors
+///
+/// Returns `Err` if the query fails.
+pub async fn is_migration_applied(pool: &SqlitePool, version: &str) -> Result<bool, String> {
+    let row = sqlx::query("SELECT version FROM _schema_migrations WHERE version = ?")
+        .bind(version)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Failed to check migration {version}: {e}"))?;
+
+    Ok(row.is_some())
+}
+
+/// Records a migration version in `_schema_migrations` after it has been applied.
+///
+/// Returns `Err` if the version is already recorded (PRIMARY KEY violation) or
+/// the query otherwise fails.
+///
+/// # Errors
+///
+/// Returns `Err` if the query fails.
+pub async fn record_migration(pool: &SqlitePool, version: &str) -> Result<(), String> {
+    sqlx::query("INSERT INTO _schema_migrations (version) VALUES (?)")
+        .bind(version)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to record migration {version}: {e}"))?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
 

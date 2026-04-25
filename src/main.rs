@@ -52,15 +52,9 @@ async fn main() {
     // Ensure the migration tracking table exists before running any migrations.
     // This table records which migrations have been applied so each one runs
     // exactly once, making every migration idempotent regardless of its SQL.
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS _schema_migrations (
-             version    TEXT PRIMARY KEY,
-             applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-         )"
-    )
-    .execute(&pool)
-    .await
-    .expect("Failed to create _schema_migrations table");
+    storage::ensure_migrations_table(&pool)
+        .await
+        .expect("Failed to create _schema_migrations table");
 
     run_migration(&pool, "001", include_str!("../migrations/001_initial.sql")).await;
     run_migration(&pool, "002", include_str!("../migrations/002_multiple_entries_per_slot.sql")).await;
@@ -147,27 +141,21 @@ async fn main() {
 
 /// Runs a migration SQL string if it has not already been applied.
 ///
-/// Checks `_schema_migrations` for `version` before executing; records the
-/// version after success. This makes every migration idempotent at the
+/// Delegates the tracking-table checks to `storage` so that all SQL stays
+/// within the storage layer. This makes every migration idempotent at the
 /// application level regardless of whether the SQL itself is idempotent.
 async fn run_migration(pool: &sqlx::SqlitePool, version: &str, sql: &str) {
-    let already_applied: Option<_> = sqlx::query(
-        "SELECT version FROM _schema_migrations WHERE version = ?"
-    )
-    .bind(version)
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None);
+    let already_applied = storage::is_migration_applied(pool, version)
+        .await
+        .unwrap_or_else(|e| panic!("Failed to check migration {version}: {e}"));
 
-    if already_applied.is_none() {
+    if !already_applied {
         sqlx::query(sql)
             .execute(pool)
             .await
             .unwrap_or_else(|e| panic!("Failed to run migration {version}: {e}"));
 
-        sqlx::query("INSERT INTO _schema_migrations (version) VALUES (?)")
-            .bind(version)
-            .execute(pool)
+        storage::record_migration(pool, version)
             .await
             .unwrap_or_else(|e| panic!("Failed to record migration {version}: {e}"));
 
