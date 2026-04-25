@@ -179,6 +179,23 @@ fn validate_range(start: NaiveDate, end: NaiveDate) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    async fn setup() -> SqlitePool {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        sqlx::query(include_str!("../migrations/001_initial.sql"))
+            .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO users (id, username, password_hash) VALUES (1, 'test', 'placeholder')"
+        )
+        .execute(&pool).await.unwrap();
+        // Recipe with one ingredient so the shopping list has something to return.
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (1, 1, 'Test Recipe', '[{\"name\":\"Flour\",\"quantity\":200.0,\"unit\":\"g\"}]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+        pool
+    }
+
     #[test]
     fn test_validate_range_valid() {
         let start = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
@@ -197,5 +214,107 @@ mod tests {
         let start = NaiveDate::from_ymd_opt(2026, 1, 7).unwrap();
         let end = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
         assert!(validate_range(start, end).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_plan_meal_happy_path() {
+        let pool = setup().await;
+        let date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+        plan_meal(&pool, date, MealSlot::Lunch, 1).await.expect("plan_meal should succeed");
+        let meals = get_meals_in_range(&pool, date, date).await.unwrap();
+        assert_eq!(meals.len(), 1);
+        assert_eq!(meals[0].recipe_id, 1);
+        assert_eq!(meals[0].slot, MealSlot::Lunch);
+    }
+
+    #[tokio::test]
+    async fn test_plan_meal_invalid_recipe_id() {
+        let pool = setup().await;
+        let date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+        let result = plan_meal(&pool, date, MealSlot::Lunch, 999_999).await;
+        assert!(result.is_err(), "Planning with a non-existent recipe should fail");
+    }
+
+    #[tokio::test]
+    async fn test_remove_planned_meal() {
+        let pool = setup().await;
+        let date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+        plan_meal(&pool, date, MealSlot::Dinner, 1).await.unwrap();
+        remove_planned_meal(&pool, date, MealSlot::Dinner).await.expect("Remove should succeed");
+        let meals = get_meals_in_range(&pool, date, date).await.unwrap();
+        assert!(meals.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_remove_planned_meal_not_found() {
+        let pool = setup().await;
+        let date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+        // Removing a non-existent entry is a no-op — idempotent by design.
+        assert!(remove_planned_meal(&pool, date, MealSlot::Breakfast).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_mark_as_cooked_happy_path() {
+        let pool = setup().await;
+        let date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+        mark_as_cooked(&pool, date, 1).await.expect("mark_as_cooked should succeed");
+        let cooked = get_cooked_in_range(&pool, date, date).await.unwrap();
+        assert_eq!(cooked.len(), 1);
+        assert_eq!(cooked[0].recipe_id, 1);
+    }
+
+    #[tokio::test]
+    async fn test_mark_as_cooked_invalid_recipe() {
+        let pool = setup().await;
+        let date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+        let result = mark_as_cooked(&pool, date, 999_999).await;
+        assert!(result.is_err(), "Marking a non-existent recipe as cooked should fail");
+    }
+
+    #[tokio::test]
+    async fn test_get_cooked_in_range_invalid_range() {
+        let pool = setup().await;
+        let start = NaiveDate::from_ymd_opt(2026, 4, 7).unwrap();
+        let end = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+        assert!(get_cooked_in_range(&pool, start, end).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_get_shopping_list_empty_range() {
+        let pool = setup().await;
+        let start = NaiveDate::from_ymd_opt(2099, 1, 1).unwrap();
+        let end = NaiveDate::from_ymd_opt(2099, 1, 7).unwrap();
+        let list = get_shopping_list(&pool, start, end).await.unwrap();
+        assert!(list.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_shopping_list_returns_ingredients() {
+        let pool = setup().await;
+        let date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+        plan_meal(&pool, date, MealSlot::Lunch, 1).await.unwrap();
+        let list = get_shopping_list(&pool, date, date).await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, "Flour");
+        assert!((list[0].quantity - 200.0).abs() < f32::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn test_get_shopping_list_merges_same_ingredient() {
+        let pool = setup().await;
+        // Add a second recipe that also has Flour (100g)
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (2, 1, 'Cake', '[{\"name\":\"Flour\",\"quantity\":100.0,\"unit\":\"g\"}]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+
+        let date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+        plan_meal(&pool, date, MealSlot::Lunch, 1).await.unwrap();   // 200g Flour
+        plan_meal(&pool, date, MealSlot::Dinner, 2).await.unwrap();  // 100g Flour
+
+        let list = get_shopping_list(&pool, date, date).await.unwrap();
+        assert_eq!(list.len(), 1, "Same ingredient+unit should be merged into one entry");
+        assert!((list[0].quantity - 300.0).abs() < f32::EPSILON, "Quantities should sum to 300g");
     }
 }

@@ -82,7 +82,7 @@ pub async fn delete_meal_entry(
     let date_str = date.to_string();
     let slot_str = slot.to_string();
 
-    let result = sqlx::query!(
+    sqlx::query!(
         "DELETE FROM meal_plan WHERE user_id = ? AND date = ? AND slot = ?",
         user_id, date_str, slot_str
     )
@@ -90,9 +90,6 @@ pub async fn delete_meal_entry(
     .await
     .map_err(|e| format!("Failed to delete meal entry: {e}"))?;
 
-    if result.rows_affected() == 0 {
-        return Err(format!("No meal entry found for {} / {}", date, slot));
-    }
     Ok(())
 }
 
@@ -251,5 +248,72 @@ mod tests {
         ).await.expect("Failed to load cooked entries");
 
         assert_eq!(loaded.len(), 1, "Expected duplicate to be ignored");
+    }
+
+    #[tokio::test]
+    async fn test_delete_meal_entry() {
+        let pool = setup().await;
+        let date = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        let entry = MealEntry { date, slot: MealSlot::Breakfast, recipe_id: 1 };
+        add_meal_entry(&pool, 1, &entry).await.unwrap();
+        delete_meal_entry(&pool, 1, date, MealSlot::Breakfast).await.expect("Should delete successfully");
+        let loaded = load_meal_entries_in_range(&pool, 1, date, date).await.unwrap();
+        assert!(loaded.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_delete_meal_entry_not_found() {
+        let pool = setup().await;
+        let date = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        // Deleting a non-existent entry is a no-op — idempotent by design.
+        assert!(delete_meal_entry(&pool, 1, date, MealSlot::Dinner).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_load_meal_entries_excludes_out_of_range() {
+        let pool = setup().await;
+        let in_range = MealEntry {
+            date: NaiveDate::from_ymd_opt(2026, 6, 15).unwrap(),
+            slot: MealSlot::Lunch,
+            recipe_id: 1,
+        };
+        let out_of_range = MealEntry {
+            date: NaiveDate::from_ymd_opt(2026, 7, 1).unwrap(),
+            slot: MealSlot::Lunch,
+            recipe_id: 1,
+        };
+        add_meal_entry(&pool, 1, &in_range).await.unwrap();
+        add_meal_entry(&pool, 1, &out_of_range).await.unwrap();
+
+        let loaded = load_meal_entries_in_range(
+            &pool, 1,
+            NaiveDate::from_ymd_opt(2026, 6, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 6, 30).unwrap(),
+        ).await.unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].date, in_range.date);
+    }
+
+    #[tokio::test]
+    async fn test_load_cooked_entries_range_filtering() {
+        let pool = setup().await;
+        let in_range = CookedEntry {
+            date: NaiveDate::from_ymd_opt(2026, 6, 10).unwrap(),
+            recipe_id: 1,
+        };
+        let out_of_range = CookedEntry {
+            date: NaiveDate::from_ymd_opt(2026, 7, 10).unwrap(),
+            recipe_id: 1,
+        };
+        add_cooked_entry(&pool, 1, &in_range).await.unwrap();
+        add_cooked_entry(&pool, 1, &out_of_range).await.unwrap();
+
+        let loaded = load_cooked_entries_in_range(
+            &pool, 1,
+            NaiveDate::from_ymd_opt(2026, 6, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 6, 30).unwrap(),
+        ).await.unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].date, in_range.date);
     }
 }

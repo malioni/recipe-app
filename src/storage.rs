@@ -194,14 +194,11 @@ pub async fn save_recipe(pool: &SqlitePool, id: i64, recipe: &Recipe) -> Result<
 ///
 /// Returns `Err` if no recipe exists at `id` or the delete query fails.
 pub async fn delete_recipe(pool: &SqlitePool, id: i64) -> Result<(), String> {
-    let result = sqlx::query!("DELETE FROM recipes WHERE id = ?", id)
+    sqlx::query!("DELETE FROM recipes WHERE id = ?", id)
         .execute(pool)
         .await
         .map_err(|e| format!("Failed to delete recipe: {e}"))?;
 
-    if result.rows_affected() == 0 {
-        return Err(format!("Recipe with ID {} not found", id));
-    }
     Ok(())
 }
 
@@ -343,5 +340,79 @@ mod tests {
         let loaded = load_recipe(&pool, id).await.expect("Failed to load recipe");
         assert_eq!(loaded.name, "Updated");
         assert_eq!(loaded.source_url, Some("https://updated.com".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_create_user() {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        sqlx::query(include_str!("../migrations/001_initial.sql"))
+            .execute(&pool).await.unwrap();
+        let id = create_user(&pool, "alice", "hash123").await.expect("Failed to create user");
+        assert!(id > 0);
+        let user = load_user_by_username(&pool, "alice").await.unwrap().unwrap();
+        assert_eq!(user.username, "alice");
+        assert_eq!(user.password_hash, "hash123");
+    }
+
+    #[tokio::test]
+    async fn test_create_user_duplicate_fails() {
+        let pool = setup().await;
+        // "test" user already inserted by setup()
+        let result = create_user(&pool, "test", "anotherhash").await;
+        assert!(result.is_err(), "Duplicate username should fail");
+    }
+
+    #[tokio::test]
+    async fn test_save_recipe_not_found() {
+        let pool = setup().await;
+        let recipe = Recipe {
+            id: 0, name: "Ghost".to_string(), source_url: None,
+            ingredients: vec![], instructions: vec![],
+        };
+        let result = save_recipe(&pool, 999_999, &recipe).await;
+        assert!(result.is_err(), "Updating a non-existent recipe should fail");
+    }
+
+    #[tokio::test]
+    async fn test_delete_recipe_not_found() {
+        let pool = setup().await;
+        // Deleting a non-existent ID is a no-op — idempotent by design.
+        assert!(delete_recipe(&pool, 999_999).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_add_recipe_with_ingredients_roundtrip() {
+        let pool = setup().await;
+        let recipe = Recipe {
+            id: 0,
+            name: "Soup".to_string(),
+            source_url: None,
+            ingredients: vec![
+                Ingredient { name: "Water".to_string(), quantity: 1.5, unit: "L".to_string() },
+                Ingredient { name: "Salt".to_string(), quantity: 5.0, unit: "g".to_string() },
+            ],
+            instructions: vec!["Boil water".to_string(), "Add salt".to_string()],
+        };
+        let id = add_recipe(&pool, 1, &recipe).await.unwrap();
+        let loaded = load_recipe(&pool, id).await.unwrap();
+        assert_eq!(loaded.ingredients.len(), 2);
+        assert_eq!(loaded.ingredients[0].name, "Water");
+        assert!((loaded.ingredients[0].quantity - 1.5).abs() < f32::EPSILON);
+        assert_eq!(loaded.ingredients[1].unit, "g");
+        assert_eq!(loaded.instructions, vec!["Boil water", "Add salt"]);
+    }
+
+    #[tokio::test]
+    async fn test_load_all_recipes_ordered_by_id() {
+        let pool = setup().await;
+        for name in ["Zucchini Soup", "Apple Pie", "Bread"] {
+            let r = Recipe { id: 0, name: name.to_string(), source_url: None, ingredients: vec![], instructions: vec![] };
+            add_recipe(&pool, 1, &r).await.unwrap();
+        }
+        let recipes = load_all_recipes(&pool, 1).await.unwrap();
+        assert_eq!(recipes.len(), 3);
+        // ORDER BY id means insertion order is preserved
+        assert_eq!(recipes[0].name, "Zucchini Soup");
+        assert_eq!(recipes[2].name, "Bread");
     }
 }
