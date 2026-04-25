@@ -11,7 +11,10 @@ use crate::storage;
 use crate::SINGLE_USER_ID;
 
 /// Maximum number of meal plan entries a single user may have at once.
-const MAX_MEAL_PLAN_ENTRIES: usize = 1000;    
+#[cfg(not(test))]
+const MAX_MEAL_PLAN_ENTRIES: usize = 1000;
+#[cfg(test)]
+const MAX_MEAL_PLAN_ENTRIES: usize = 3;
 
 // ---------------------------------------------------------------------------
 // Meal plan
@@ -297,6 +300,25 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].name, "Flour");
         assert!((list[0].quantity - 200.0).abs() < f32::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn test_meal_plan_quota_enforced() {
+        let pool = setup().await;
+        let slots = [MealSlot::Breakfast, MealSlot::Lunch, MealSlot::Dinner];
+        let base = NaiveDate::from_ymd_opt(2030, 1, 1).unwrap();
+        let mut last_date = base;
+        for i in 0..MAX_MEAL_PLAN_ENTRIES {
+            let date = base + chrono::Duration::days((i / slots.len()) as i64);
+            let slot = slots[i % slots.len()].clone();
+            plan_meal(&pool, date, slot, 1).await
+                .expect("should succeed within quota");
+            last_date = date;
+        }
+        let overflow_date = last_date + chrono::Duration::days(1);
+        let result = plan_meal(&pool, overflow_date, MealSlot::Breakfast, 1).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("limit"));
     }
 
     #[tokio::test]
