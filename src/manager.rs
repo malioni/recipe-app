@@ -5,7 +5,10 @@ use crate::SINGLE_USER_ID;
 use validator::Validate;
 
 /// Maximum number of recipes a single user may store.
+#[cfg(not(test))]
 const MAX_RECIPES_PER_USER: usize = 500;
+#[cfg(test)]
+const MAX_RECIPES_PER_USER: usize = 3;
 
 // ---------------------------------------------------------------------------
 // Auth
@@ -207,5 +210,17 @@ mod tests {
     async fn test_get_user_by_username_not_found() {
         let pool = setup().await;
         assert!(get_user_by_username(&pool, "nobody").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_recipe_quota_enforced() {
+        let pool = setup().await;
+        for i in 0..MAX_RECIPES_PER_USER {
+            add_recipe(&pool, bare_recipe(&format!("Recipe {i}"))).await
+                .expect("should succeed within quota");
+        }
+        let result = add_recipe(&pool, bare_recipe("One Too Many")).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("limit"));
     }
 }
