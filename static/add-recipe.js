@@ -131,8 +131,8 @@ async function submitRecipe() {
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
-  document.getElementById("add-ingredient-btn").addEventListener("click", addIngredient);
-  document.getElementById("add-step-btn").addEventListener("click", addStep);
+  document.getElementById("add-ingredient-btn").addEventListener("click", () => addIngredient());
+  document.getElementById("add-step-btn").addEventListener("click", () => addStep());
   document.getElementById("submit-btn").addEventListener("click", submitRecipe);
 
   const params = new URLSearchParams(window.location.search);
