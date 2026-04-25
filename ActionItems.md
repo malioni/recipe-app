@@ -418,7 +418,7 @@ The following threat model should be kept in mind when making architectural deci
 
 > Identified in code review. All tests use in-memory SQLite via the existing `setup()` helpers.
 
-### 30. [ ] Quota Limit Tests
+### 30. [x] Quota Limit Tests
 
 **Context:** `MAX_RECIPES_PER_USER` (500) and `MAX_MEAL_PLAN_ENTRIES` (1000) are enforced in the manager layer but have no tests. Inserting the full count in tests is slow and fragile.
 
