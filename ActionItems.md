@@ -112,10 +112,10 @@ The following threat model should be kept in mind when making architectural deci
 
 **Actions:**
 
-- Add `ShoppingListItem` struct to `model.rs` (aggregated ingredient: name, total quantity, unit)
-- Add a storage query in `calendar_storage.rs` that fetches ingredients for all meal entries in a date range, grouped and summed by `(name, unit)` after normalisation
-- Add a manager method in `calendar_manager.rs`
-- Add `GET /api/shopping-list?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD` to `network.rs`; default range is the current week (Mon–Sun) if params are omitted
+- ~~Add `ShoppingListItem` struct to `model.rs` (aggregated ingredient: name, total quantity, unit)~~ ✅ Done — struct carries `metric_quantity`/`metric_unit` (g/kg or ml/l threshold display) and `imperial_quantity`/`imperial_unit` (oz or fl oz)
+- ~~Add a storage query in `calendar_storage.rs` that fetches ingredients for all meal entries in a date range, grouped and summed by `(name, unit)` after normalisation~~ ✅ Done
+- ~~Add a manager method in `calendar_manager.rs`~~ ✅ Done — `get_shopping_list` returns `Vec<ShoppingListItem>`
+- ~~Add `GET /api/shopping-list?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD` to `network.rs`; default range is the current week (Mon–Sun) if params are omitted~~ ✅ Done (`GET /calendar/shopping-list?start=&end=`)
 - ~~Implement ingredient unit normalisation (at minimum: `g`/`kg`, `ml`/`l`, `tsp`/`tbsp`/`cup`)~~ ✅ Done (see above)
 - Document the Shortcut setup: "Get Contents of URL" → parse JSON → loop → "Add New Reminder"
 

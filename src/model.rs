@@ -71,6 +71,26 @@ pub struct MealEntry {
 
 fn default_one() -> i64 { 1 }
 
+/// A shopping list entry with metric and optional imperial display quantities.
+///
+/// Aggregation happens internally in `g`/`ml`; this struct carries the
+/// already-rounded display values so the caller never needs to know the
+/// internal canonical unit.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ShoppingListItem {
+    pub name: String,
+    /// Quantity in `metric_unit` (already ceiled to the display step).
+    pub metric_quantity: f32,
+    /// `"g"` or `"kg"` for weight; `"ml"` or `"l"` for volume; original unit
+    /// string for count-based / unrecognised units.
+    pub metric_unit: String,
+    /// Quantity in `imperial_unit` (ceiled to nearest whole unit).
+    /// `None` for count-based or unrecognised units.
+    pub imperial_quantity: Option<f32>,
+    /// `"oz"` for weight, `"fl oz"` for volume, `None` otherwise.
+    pub imperial_unit: Option<String>,
+}
+
 /// A record of a recipe that was actually cooked on a given date.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct CookedEntry {
