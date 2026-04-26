@@ -146,9 +146,7 @@ pub async fn get_cooked_in_range(
 /// tsp, tbsp, cup) all normalise to `ml`. Units from different physical
 /// dimensions (e.g. weight vs. volume) are kept as separate entries.
 ///
-/// When two ingredients share a name but differ only in casing (e.g. "Flour"
-/// vs "flour"), the casing of the entry that appears first in the underlying
-/// `ORDER BY date, slot` query is preserved in the output.
+/// All ingredient names in the output are lowercased for consistency.
 ///
 /// # Errors
 ///
