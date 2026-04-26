@@ -107,6 +107,16 @@
   color: #0d6efd;
 }
 
+/* Loading spinner — spans all 8 grid columns */
+.calendar-loading {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  min-height: 200px;
+}
+
 /* Shopping list panel */
 #shopping-panel .ingredient-row {
   display: flex;
