@@ -422,7 +422,11 @@ mod tests {
         let list = get_shopping_list(&pool, date, date).await.unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].name, "flour");
-        assert!((list[0].quantity - 200.0).abs() < f32::EPSILON);
+        // 200 g ≥ 100 g threshold → 0.2 kg; imperial: ceil(200 × 0.035274) = ceil(7.055) = 8 oz
+        assert!((list[0].metric_quantity - 0.2).abs() < 0.001);
+        assert_eq!(list[0].metric_unit, "kg");
+        assert_eq!(list[0].imperial_quantity, Some(8.0));
+        assert_eq!(list[0].imperial_unit, Some("oz".to_string()));
     }
 
     #[tokio::test]
@@ -473,7 +477,10 @@ mod tests {
 
         let list = get_shopping_list(&pool, date, date).await.unwrap();
         assert_eq!(list.len(), 1, "Same ingredient+unit should be merged into one entry");
-        assert!((list[0].quantity - 300.0).abs() < f32::EPSILON, "Quantities should sum to 300g");
+        // 300 g → 0.3 kg; imperial: ceil(300 × 0.035274) = ceil(10.582) = 11 oz
+        assert!((list[0].metric_quantity - 0.3).abs() < 0.001);
+        assert_eq!(list[0].metric_unit, "kg");
+        assert_eq!(list[0].imperial_quantity, Some(11.0));
     }
 
     #[tokio::test]
@@ -484,7 +491,10 @@ mod tests {
         plan_meal(&pool, date, MealSlot::Lunch, 1, 2).await.unwrap();
         let list = get_shopping_list(&pool, date, date).await.unwrap();
         assert_eq!(list.len(), 1);
-        assert!((list[0].quantity - 400.0).abs() < f32::EPSILON, "2 portions should double the quantity");
+        // 2 × 200 g = 400 g → 0.4 kg; imperial: ceil(400 × 0.035274) = ceil(14.11) = 15 oz
+        assert!((list[0].metric_quantity - 0.4).abs() < 0.001, "2 portions should double the quantity");
+        assert_eq!(list[0].metric_unit, "kg");
+        assert_eq!(list[0].imperial_quantity, Some(15.0));
     }
 
     #[tokio::test]
@@ -512,7 +522,11 @@ mod tests {
         let list = get_shopping_list(&pool, date, date).await.unwrap();
         assert_eq!(list.len(), 1, "\"Flour\" and \"flour\" should merge");
         assert_eq!(list[0].name, "flour", "Output name should be lowercased");
-        assert!((list[0].quantity - 300.0).abs() < 0.001);
+        // 300 g ≥ 100 g → 0.3 kg; imperial: ceil(300 × 0.035274) = ceil(10.582) = 11 oz
+        assert!((list[0].metric_quantity - 0.3).abs() < 0.001);
+        assert_eq!(list[0].metric_unit, "kg");
+        assert_eq!(list[0].imperial_quantity, Some(11.0));
+        assert_eq!(list[0].imperial_unit, Some("oz".to_string()));
     }
 
     #[tokio::test]
@@ -536,9 +550,12 @@ mod tests {
         let list = get_shopping_list(&pool, date, date).await.unwrap();
         let butter: Vec<_> = list.iter().filter(|i| i.name == "butter").collect();
         assert_eq!(butter.len(), 1, "lb and oz should merge into one entry");
-        assert_eq!(butter[0].unit, "g");
-        let expected = 453.592 + 8.0 * 28.3495; // ≈ 680.388
-        assert!((butter[0].quantity - expected).abs() < 0.01);
+        // 453.592 + 226.796 = 680.388 g ≥ 100 g → ceil_to(680.388, 100)/1000 = 0.7 kg
+        // imperial: ceil(680.388 × 0.035274) — f32 precision lands just above 24, so ceils to 25 oz
+        assert_eq!(butter[0].metric_unit, "kg");
+        assert!((butter[0].metric_quantity - 0.7).abs() < 0.001);
+        assert_eq!(butter[0].imperial_quantity, Some(25.0));
+        assert_eq!(butter[0].imperial_unit, Some("oz".to_string()));
     }
 
     #[tokio::test]
@@ -562,8 +579,11 @@ mod tests {
         let list = get_shopping_list(&pool, date, date).await.unwrap();
         let sugar: Vec<_> = list.iter().filter(|i| i.name == "sugar").collect();
         assert_eq!(sugar.len(), 1, "kg and g should merge");
-        assert_eq!(sugar[0].unit, "g");
-        assert!((sugar[0].quantity - 700.0).abs() < 0.001);
+        // 500 g + 200 g = 700 g ≥ 100 g → 0.7 kg; imperial: ceil(700 × 0.035274) = ceil(24.692) = 25 oz
+        assert_eq!(sugar[0].metric_unit, "kg");
+        assert!((sugar[0].metric_quantity - 0.7).abs() < 0.001);
+        assert_eq!(sugar[0].imperial_quantity, Some(25.0));
+        assert_eq!(sugar[0].imperial_unit, Some("oz".to_string()));
     }
 
     #[tokio::test]
@@ -587,9 +607,11 @@ mod tests {
         let list = get_shopping_list(&pool, date, date).await.unwrap();
         let salt: Vec<_> = list.iter().filter(|i| i.name == "salt").collect();
         assert_eq!(salt.len(), 1, "oz and g should merge");
-        assert_eq!(salt[0].unit, "g");
-        let expected = 2.0 * 28.3495 + 10.0; // ≈ 66.699
-        assert!((salt[0].quantity - expected).abs() < 0.01);
+        // 2 oz + 10 g = 66.699 g < 100 g → ceil_to(66.699, 10) = 70 g; imperial: ceil(66.699 × 0.035274) = ceil(2.353) = 3 oz
+        assert_eq!(salt[0].metric_unit, "g");
+        assert!((salt[0].metric_quantity - 70.0).abs() < 0.001);
+        assert_eq!(salt[0].imperial_quantity, Some(3.0));
+        assert_eq!(salt[0].imperial_unit, Some("oz".to_string()));
     }
 
     #[tokio::test]
@@ -613,9 +635,12 @@ mod tests {
         let list = get_shopping_list(&pool, date, date).await.unwrap();
         let water: Vec<_> = list.iter().filter(|i| i.name == "water").collect();
         assert_eq!(water.len(), 1, "l, tbsp, and tsp should all merge");
-        assert_eq!(water[0].unit, "ml");
-        let expected = 500.0 + 2.0 * 14.7868 + 3.0 * 4.92892; // ≈ 544.337
-        assert!((water[0].quantity - expected).abs() < 0.01);
+        // 500 + 29.574 + 14.787 ≈ 544.36 ml ≥ 100 ml → ceil_to(544.36, 100)/1000 = 0.6 l
+        // imperial: ceil(544.36 × 0.033814) = ceil(18.41) = 19 fl oz
+        assert_eq!(water[0].metric_unit, "l");
+        assert!((water[0].metric_quantity - 0.6).abs() < 0.001);
+        assert_eq!(water[0].imperial_quantity, Some(19.0));
+        assert_eq!(water[0].imperial_unit, Some("fl oz".to_string()));
     }
 
     #[tokio::test]
@@ -635,8 +660,157 @@ mod tests {
         let list = get_shopping_list(&pool, date, date).await.unwrap();
         let flour: Vec<_> = list.iter().filter(|i| i.name == "flour").collect();
         assert_eq!(flour.len(), 2, "Weight and volume must not be merged");
-        let units: Vec<&str> = flour.iter().map(|i| i.unit.as_str()).collect();
-        assert!(units.contains(&"g") && units.contains(&"ml"));
+        // 200 g → metric "kg"; 100 ml → metric "l" (exactly at threshold, ≥ 100 → kg/l)
+        let metric_units: Vec<&str> = flour.iter().map(|i| i.metric_unit.as_str()).collect();
+        assert!(metric_units.contains(&"kg") && metric_units.contains(&"l"));
+    }
+
+    #[tokio::test]
+    async fn test_shopping_list_imperial_weight_oz() {
+        let pool = setup().await;
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (2, 1, 'Heavy', '[{\"name\":\"Lead\",\"quantity\":1.0,\"unit\":\"kg\"}]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+
+        let date = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
+        plan_meal(&pool, date, MealSlot::Lunch, 2, 1).await.unwrap();
+        let list = get_shopping_list(&pool, date, date).await.unwrap();
+        let item = list.iter().find(|i| i.name == "lead").unwrap();
+        // 1000 g → imperial: ceil(1000 × 0.035274) = ceil(35.274) = 36 oz
+        assert_eq!(item.imperial_quantity, Some(36.0));
+        assert_eq!(item.imperial_unit, Some("oz".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_shopping_list_imperial_volume_fl_oz() {
+        let pool = setup().await;
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (2, 1, 'Drink', '[{\"name\":\"Juice\",\"quantity\":1.0,\"unit\":\"l\"}]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+
+        let date = NaiveDate::from_ymd_opt(2026, 5, 2).unwrap();
+        plan_meal(&pool, date, MealSlot::Lunch, 2, 1).await.unwrap();
+        let list = get_shopping_list(&pool, date, date).await.unwrap();
+        let item = list.iter().find(|i| i.name == "juice").unwrap();
+        // 1000 ml → imperial: ceil(1000 × 0.033814) = ceil(33.814) = 34 fl oz
+        assert_eq!(item.imperial_quantity, Some(34.0));
+        assert_eq!(item.imperial_unit, Some("fl oz".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_shopping_list_no_imperial_for_unknown_unit() {
+        let pool = setup().await;
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (2, 1, 'Garlic Bread', '[{\"name\":\"Garlic\",\"quantity\":3.0,\"unit\":\"clove\"}]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+
+        let date = NaiveDate::from_ymd_opt(2026, 5, 3).unwrap();
+        plan_meal(&pool, date, MealSlot::Lunch, 2, 1).await.unwrap();
+        let list = get_shopping_list(&pool, date, date).await.unwrap();
+        let item = list.iter().find(|i| i.name == "garlic").unwrap();
+        assert_eq!(item.imperial_quantity, None);
+        assert_eq!(item.imperial_unit, None);
+        assert_eq!(item.metric_unit, "clove");
+    }
+
+    #[tokio::test]
+    async fn test_shopping_list_metric_threshold_weight() {
+        let pool = setup().await;
+        // 50 g < 100 g → display in g; 200 g ≥ 100 g → display in kg
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (2, 1, 'A', '[{\"name\":\"SmallWeight\",\"quantity\":50.0,\"unit\":\"g\"}]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (3, 1, 'B', '[{\"name\":\"LargeWeight\",\"quantity\":200.0,\"unit\":\"g\"}]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+
+        let date = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap();
+        plan_meal(&pool, date, MealSlot::Lunch, 2, 1).await.unwrap();
+        plan_meal(&pool, date, MealSlot::Dinner, 3, 1).await.unwrap();
+        let list = get_shopping_list(&pool, date, date).await.unwrap();
+
+        let small = list.iter().find(|i| i.name == "smallweight").unwrap();
+        assert_eq!(small.metric_unit, "g");
+        assert!((small.metric_quantity - 50.0).abs() < 0.001);
+
+        let large = list.iter().find(|i| i.name == "largeweight").unwrap();
+        assert_eq!(large.metric_unit, "kg");
+        assert!((large.metric_quantity - 0.2).abs() < 0.001);
+    }
+
+    #[tokio::test]
+    async fn test_shopping_list_metric_threshold_volume() {
+        let pool = setup().await;
+        // 50 ml < 100 ml → display in ml; 200 ml ≥ 100 ml → display in l
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (2, 1, 'A', '[{\"name\":\"SmallVol\",\"quantity\":50.0,\"unit\":\"ml\"}]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (3, 1, 'B', '[{\"name\":\"LargeVol\",\"quantity\":200.0,\"unit\":\"ml\"}]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+
+        let date = NaiveDate::from_ymd_opt(2026, 5, 5).unwrap();
+        plan_meal(&pool, date, MealSlot::Lunch, 2, 1).await.unwrap();
+        plan_meal(&pool, date, MealSlot::Dinner, 3, 1).await.unwrap();
+        let list = get_shopping_list(&pool, date, date).await.unwrap();
+
+        let small = list.iter().find(|i| i.name == "smallvol").unwrap();
+        assert_eq!(small.metric_unit, "ml");
+        assert!((small.metric_quantity - 50.0).abs() < 0.001);
+
+        let large = list.iter().find(|i| i.name == "largevol").unwrap();
+        assert_eq!(large.metric_unit, "l");
+        assert!((large.metric_quantity - 0.2).abs() < 0.001);
+    }
+
+    #[tokio::test]
+    async fn test_shopping_list_ceiling_below_threshold() {
+        let pool = setup().await;
+        // Verifies ceiling behaviour: 61 g → 70 g, 70 g → 70 g, 71 g → 80 g
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (2, 1, 'A', '[{\"name\":\"X61\",\"quantity\":61.0,\"unit\":\"g\"}]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (3, 1, 'B', '[{\"name\":\"X70\",\"quantity\":70.0,\"unit\":\"g\"}]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (4, 1, 'C', '[{\"name\":\"X71\",\"quantity\":71.0,\"unit\":\"g\"}]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+
+        let date = NaiveDate::from_ymd_opt(2026, 5, 6).unwrap();
+        plan_meal(&pool, date, MealSlot::Breakfast, 2, 1).await.unwrap();
+        plan_meal(&pool, date, MealSlot::Lunch, 3, 1).await.unwrap();
+        plan_meal(&pool, date, MealSlot::Dinner, 4, 1).await.unwrap();
+        let list = get_shopping_list(&pool, date, date).await.unwrap();
+
+        let x61 = list.iter().find(|i| i.name == "x61").unwrap();
+        assert!((x61.metric_quantity - 70.0).abs() < 0.001, "61 g should ceil to 70 g");
+
+        let x70 = list.iter().find(|i| i.name == "x70").unwrap();
+        assert!((x70.metric_quantity - 70.0).abs() < 0.001, "70 g exact multiple should stay 70 g");
+
+        let x71 = list.iter().find(|i| i.name == "x71").unwrap();
+        assert!((x71.metric_quantity - 80.0).abs() < 0.001, "71 g should ceil to 80 g");
     }
 
     #[test]
