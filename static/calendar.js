@@ -86,6 +86,9 @@ async function loadWeek() {
   ];
   navBtns.forEach((b) => (b.disabled = true));
 
+  const grid = document.getElementById("calendar-grid");
+  grid.innerHTML = `<div class="calendar-loading"><div class="spinner-border text-secondary" role="status"><span class="visually-hidden">Loading…</span></div></div>`;
+
   updateWeekLabel();
   const start = toISO(weekStart);
   const end = toISO(addDays(weekStart, 6));
