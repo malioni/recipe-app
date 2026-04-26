@@ -160,6 +160,32 @@ The following threat model should be kept in mind when making architectural deci
 
 ## Phase 6 — Future / Deferred
 
+### 37. [ ] User Deletion (Admin)
+
+**Context:** Admins can create and manage users (item 26) but cannot yet delete them. Deleting a user cascades automatically to their recipes, meal plan entries, and cooked log entries via `ON DELETE CASCADE`. Deferred until there is a clear operational need.
+
+**Actions:**
+
+- Add `DELETE /admin/users/:id` route and handler
+- Add `storage::delete_user(pool, user_id)` function
+- Add `manager::admin_delete_user(pool, admin_user_id, target_user_id)` — prevent self-deletion
+- Add integration test: deleting a user removes their recipes and calendar data
+
+---
+
+### 38. [ ] Self-Service Password Change
+
+**Context:** Currently only an admin can change passwords (item 26). Users should eventually be able to change their own password from a profile or settings page.
+
+**Actions:**
+
+- Add `GET /profile` page route serving `html/profile.html`
+- Add `POST /profile/password` handler accepting `{ current_password, new_password }`
+- In manager: verify `current_password` against stored hash before applying change
+- In manager: enforce minimum password length (≥ 8 chars)
+
+---
+
 ### 36. [ ] Apple Shortcuts Integration for Shopping List
 
 **Context:** An Apple Shortcut on iPhone could call `GET /calendar/shopping-list` and create individual Reminders items from the response — no native iOS app needed. Deferred until the clipboard approach (item 25) proves insufficient.
