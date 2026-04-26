@@ -202,6 +202,8 @@ mod tests {
             .execute(&pool).await.expect("Failed to run migration 001");
         sqlx::query(include_str!("../migrations/002_multiple_entries_per_slot.sql"))
             .execute(&pool).await.expect("Failed to run migration 002");
+        sqlx::query(include_str!("../migrations/003_add_portions_to_meal_plan.sql"))
+            .execute(&pool).await.expect("Failed to run migration 003");
         sqlx::query("INSERT INTO users (id, username, password_hash) VALUES (1, 'test', 'placeholder')")
             .execute(&pool)
             .await
@@ -221,6 +223,7 @@ mod tests {
             date: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
             slot: MealSlot::Lunch,
             recipe_id: 1,
+            portions: 1,
         };
         add_meal_entry(&pool, 1, &entry).await.expect("Failed to add meal entry");
 
@@ -241,8 +244,8 @@ mod tests {
             .execute(&pool).await.unwrap();
 
         let date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
-        let entry1 = MealEntry { id: None, date, slot: MealSlot::Dinner, recipe_id: 1 };
-        let entry2 = MealEntry { id: None, date, slot: MealSlot::Dinner, recipe_id: 2 };
+        let entry1 = MealEntry { id: None, date, slot: MealSlot::Dinner, recipe_id: 1, portions: 1 };
+        let entry2 = MealEntry { id: None, date, slot: MealSlot::Dinner, recipe_id: 2, portions: 1 };
 
         add_meal_entry(&pool, 1, &entry1).await.unwrap();
         add_meal_entry(&pool, 1, &entry2).await.unwrap();
@@ -276,7 +279,7 @@ mod tests {
     async fn test_delete_meal_entry() {
         let pool = setup().await;
         let date = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
-        let entry = MealEntry { id: None, date, slot: MealSlot::Breakfast, recipe_id: 1 };
+        let entry = MealEntry { id: None, date, slot: MealSlot::Breakfast, recipe_id: 1, portions: 1 };
         add_meal_entry(&pool, 1, &entry).await.unwrap();
         let loaded = load_meal_entries_in_range(&pool, 1, date, date).await.unwrap();
         let id = loaded[0].id.unwrap();
@@ -299,8 +302,8 @@ mod tests {
             .execute(&pool).await.unwrap();
 
         let date = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
-        add_meal_entry(&pool, 1, &MealEntry { id: None, date, slot: MealSlot::Lunch, recipe_id: 1 }).await.unwrap();
-        add_meal_entry(&pool, 1, &MealEntry { id: None, date, slot: MealSlot::Lunch, recipe_id: 2 }).await.unwrap();
+        add_meal_entry(&pool, 1, &MealEntry { id: None, date, slot: MealSlot::Lunch, recipe_id: 1, portions: 1 }).await.unwrap();
+        add_meal_entry(&pool, 1, &MealEntry { id: None, date, slot: MealSlot::Lunch, recipe_id: 2, portions: 1 }).await.unwrap();
 
         let loaded = load_meal_entries_in_range(&pool, 1, date, date).await.unwrap();
         assert_eq!(loaded.len(), 2);
@@ -321,12 +324,14 @@ mod tests {
             date: NaiveDate::from_ymd_opt(2026, 6, 15).unwrap(),
             slot: MealSlot::Lunch,
             recipe_id: 1,
+            portions: 1,
         };
         let out_of_range = MealEntry {
             id: None,
             date: NaiveDate::from_ymd_opt(2026, 7, 1).unwrap(),
             slot: MealSlot::Lunch,
             recipe_id: 1,
+            portions: 1,
         };
         add_meal_entry(&pool, 1, &in_range).await.unwrap();
         add_meal_entry(&pool, 1, &out_of_range).await.unwrap();
