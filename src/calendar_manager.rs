@@ -814,6 +814,26 @@ mod tests {
     }
 
     #[test]
+    fn test_ceil_to() {
+        // Exact multiples stay unchanged
+        assert!((ceil_to(70.0, 10.0) - 70.0).abs() < f32::EPSILON);
+        assert!((ceil_to(100.0, 100.0) - 100.0).abs() < f32::EPSILON);
+
+        // Just above a multiple → rounds up to next step
+        assert!((ceil_to(71.0, 10.0) - 80.0).abs() < f32::EPSILON);
+        assert!((ceil_to(101.0, 100.0) - 200.0).abs() < f32::EPSILON);
+
+        // Just below a multiple → rounds up to that multiple
+        assert!((ceil_to(61.0, 10.0) - 70.0).abs() < f32::EPSILON);
+        assert!((ceil_to(99.0, 100.0) - 100.0).abs() < f32::EPSILON);
+
+        // Result is never smaller than the input
+        for v in [1.0_f32, 9.9, 10.0, 10.1, 55.5, 99.9, 100.0] {
+            assert!(ceil_to(v, 10.0) >= v, "ceil_to({v}, 10) must be >= {v}");
+        }
+    }
+
+    #[test]
     fn test_normalise_unit() {
         // Weight → g
         let (u, q) = normalise_unit("g", 100.0);
