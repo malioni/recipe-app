@@ -226,6 +226,18 @@ The following threat model should be kept in mind when making architectural deci
 
 ---
 
+### 35. [ ] CSRF Protection on State-Mutating Endpoints
+
+**Context:** A security review (2026-04-25) flagged that no CSRF token middleware is applied to the router. All state-mutating routes (POST `/calendar/entries`, DELETE `/recipes/:id`, POST `/calendar/cooked`, etc.) rely solely on session cookies. `SameSite=Lax` blocks cross-site form POSTs but not credentialed `fetch` calls from pages the user visits.
+
+**Actions:**
+
+- Add a CSRF middleware — either `tower-csrf` or a double-submit cookie pattern.
+- Alternatively, explicitly set `SameSite=Strict` on the session cookie (already using `tower-sessions`; set via `.with_same_site(SameSite::Strict)` on the cookie config) — this alone closes most practical CSRF vectors for a same-origin app.
+- Verify that `Origin` / `Referer` header validation is in place for mutating endpoints as a defence-in-depth measure.
+
+---
+
 ## Dependency Reference
 
 | Package                     | Current | Purpose             | Notes                                                                             |
