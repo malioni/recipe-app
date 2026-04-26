@@ -122,6 +122,9 @@ async function loadWeek() {
 
   if (recipesRes.ok) {
     allRecipes = await recipesRes.json();
+  } else {
+    allRecipes = [];
+    console.warn("Could not load recipes — meal names may not display correctly.");
   }
 
   renderGrid();
