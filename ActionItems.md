@@ -108,7 +108,7 @@ The following threat model should be kept in mind when making architectural deci
 **Design decisions to make:**
 
 - **Auth for the endpoint:** Session cookies work but expire and are fragile in Shortcuts. A static read-only `SHOPPING_LIST_TOKEN` env var checked as a Bearer token or query param is simpler and sufficient for a read-only LAN/personal endpoint. Decide before implementing.
-- **Ingredient unit normalisation:** Summing `200g` + `0.2kg` requires unit conversion. Must be implemented — summing mismatched units silently is wrong. Design the normalisation logic before writing the query.
+- **Ingredient unit normalisation:** ✅ Done — all weight units (g/kg/oz/lb) normalise to `g`; all volume units (ml/l/tsp/tbsp/cup) normalise to `ml`; names matched case-insensitively. Cross-dimension (weight vs. volume) stays separate.
 
 **Actions:**
 
@@ -116,7 +116,7 @@ The following threat model should be kept in mind when making architectural deci
 - Add a storage query in `calendar_storage.rs` that fetches ingredients for all meal entries in a date range, grouped and summed by `(name, unit)` after normalisation
 - Add a manager method in `calendar_manager.rs`
 - Add `GET /api/shopping-list?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD` to `network.rs`; default range is the current week (Mon–Sun) if params are omitted
-- Implement ingredient unit normalisation (at minimum: `g`/`kg`, `ml`/`l`, `tsp`/`tbsp`/`cup`)
+- ~~Implement ingredient unit normalisation (at minimum: `g`/`kg`, `ml`/`l`, `tsp`/`tbsp`/`cup`)~~ ✅ Done (see above)
 - Document the Shortcut setup: "Get Contents of URL" → parse JSON → loop → "Add New Reminder"
 
 ---
