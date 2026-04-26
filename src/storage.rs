@@ -592,6 +592,61 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[tokio::test]
+    async fn test_load_user_by_id_found() {
+        let pool = setup().await;
+        let user = load_user_by_id(&pool, 1).await.unwrap();
+        assert!(user.is_some());
+        assert_eq!(user.unwrap().username, "test");
+    }
+
+    #[tokio::test]
+    async fn test_load_user_by_id_not_found() {
+        let pool = setup().await;
+        let user = load_user_by_id(&pool, 999_999).await.unwrap();
+        assert!(user.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_load_all_users_returns_list() {
+        let pool = setup().await;
+        create_user(&pool, "alice", "hash1").await.unwrap();
+        create_user(&pool, "bob", "hash2").await.unwrap();
+        let users = load_all_users(&pool).await.unwrap();
+        // setup() inserts user id=1 ("test") plus alice and bob
+        assert_eq!(users.len(), 3);
+        assert!(users.iter().any(|u| u.username == "alice"));
+        assert!(users.iter().any(|u| u.username == "bob"));
+        // password hashes must never appear in UserInfo
+    }
+
+    #[tokio::test]
+    async fn test_promote_user_to_admin() {
+        let pool = setup().await;
+        let id = create_user(&pool, "candidate", "hash").await.unwrap();
+        let before = load_user_by_id(&pool, id).await.unwrap().unwrap();
+        assert!(!before.is_admin);
+        promote_user_to_admin(&pool, id).await.unwrap();
+        let after = load_user_by_id(&pool, id).await.unwrap().unwrap();
+        assert!(after.is_admin);
+    }
+
+    #[tokio::test]
+    async fn test_update_password() {
+        let pool = setup().await;
+        let id = create_user(&pool, "pwuser", "oldhash").await.unwrap();
+        update_password(&pool, id, "newhash").await.unwrap();
+        let user = load_user_by_id(&pool, id).await.unwrap().unwrap();
+        assert_eq!(user.password_hash, "newhash");
+    }
+
+    #[tokio::test]
+    async fn test_update_password_nonexistent_user() {
+        let pool = setup().await;
+        let result = update_password(&pool, 999_999, "hash").await;
+        assert!(result.is_err(), "Updating a non-existent user should fail");
+    }
+
+    #[tokio::test]
     async fn test_ensure_migrations_table_is_idempotent() {
         let pool = SqlitePool::connect(":memory:").await.unwrap();
         ensure_migrations_table(&pool).await.expect("first call should succeed");

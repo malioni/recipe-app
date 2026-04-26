@@ -85,11 +85,27 @@
     <script>
       const alertArea = document.getElementById('alert-area');
 
+      function escapeHtml(s) {
+        return String(s)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
       function showAlert(msg, type = 'success') {
-        alertArea.innerHTML = `<div class="alert alert-${type} alert-dismissible fade show" role="alert">
-          ${msg}
-          <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        </div>`;
+        const wrapper = document.createElement('div');
+        wrapper.className = `alert alert-${escapeHtml(type)} alert-dismissible fade show`;
+        wrapper.setAttribute('role', 'alert');
+        wrapper.textContent = msg;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn-close';
+        btn.setAttribute('data-bs-dismiss', 'alert');
+        wrapper.appendChild(btn);
+        alertArea.innerHTML = '';
+        alertArea.appendChild(wrapper);
       }
 
       async function loadUsers() {
@@ -97,17 +113,35 @@
         if (!res.ok) { showAlert('Failed to load users', 'danger'); return; }
         const users = await res.json();
         const tbody = document.getElementById('user-rows');
+        tbody.innerHTML = '';
         if (users.length === 0) {
           tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-3">No users</td></tr>';
           return;
         }
-        tbody.innerHTML = users.map(u => `
-          <tr>
-            <td>${u.id}</td>
-            <td>${u.username}</td>
-            <td>${u.is_admin ? '<span class="badge bg-danger">admin</span>' : '<span class="badge bg-secondary">user</span>'}</td>
-            <td>${u.created_at}</td>
-          </tr>`).join('');
+        users.forEach(u => {
+          const tr = document.createElement('tr');
+
+          const tdId = document.createElement('td');
+          tdId.textContent = u.id;
+
+          const tdName = document.createElement('td');
+          tdName.textContent = u.username;
+
+          const tdAdmin = document.createElement('td');
+          const badge = document.createElement('span');
+          badge.className = u.is_admin ? 'badge bg-danger' : 'badge bg-secondary';
+          badge.textContent = u.is_admin ? 'admin' : 'user';
+          tdAdmin.appendChild(badge);
+
+          const tdCreated = document.createElement('td');
+          tdCreated.textContent = u.created_at;
+
+          tr.appendChild(tdId);
+          tr.appendChild(tdName);
+          tr.appendChild(tdAdmin);
+          tr.appendChild(tdCreated);
+          tbody.appendChild(tr);
+        });
       }
 
       document.getElementById('create-form').addEventListener('submit', async e => {
@@ -122,7 +156,7 @@
         });
         const data = await res.json();
         if (res.ok) {
-          showAlert(`User created`);
+          showAlert('User created');
           e.target.reset();
           loadUsers();
         } else {
