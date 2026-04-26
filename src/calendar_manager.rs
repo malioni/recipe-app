@@ -6,7 +6,7 @@
 use std::borrow::Cow;
 use sqlx::SqlitePool;
 use chrono::NaiveDate;
-use crate::model::{CookedEntry, Ingredient, MealEntry, MealSlot};
+use crate::model::{CookedEntry, Ingredient, MealEntry, MealSlot, ShoppingListItem};
 use crate::calendar_storage;
 use crate::storage;
 use crate::SINGLE_USER_ID;
@@ -140,11 +140,13 @@ pub async fn get_cooked_in_range(
 
 /// Aggregates ingredients across all planned meals within `[start, end]`.
 ///
-/// Ingredients with the same name (case-insensitive) and physical dimension
-/// are merged by converting all quantities to a canonical unit and summing.
-/// Weight units (g, kg, oz, lb) all normalise to `g`; volume units (ml, l,
-/// tsp, tbsp, cup) all normalise to `ml`. Units from different physical
-/// dimensions (e.g. weight vs. volume) are kept as separate entries.
+/// Internally accumulates weights in `g` and volumes in `ml` for precision.
+/// The returned [`ShoppingListItem`] values carry display-ready quantities:
+/// metric values are ceiled to a human-friendly step (10 g / 10 ml below the
+/// 100 g/ml threshold; 100 g / 100 ml above it, then expressed in kg/l), and
+/// imperial values are ceiled to the nearest whole `oz` (weight) or `fl oz`
+/// (volume). Count-based or unrecognised units pass through unchanged with
+/// `imperial_quantity = None`.
 ///
 /// All ingredient names in the output are lowercased for consistency.
 ///
@@ -156,13 +158,14 @@ pub async fn get_shopping_list(
     pool: &SqlitePool,
     start: NaiveDate,
     end: NaiveDate,
-) -> Result<Vec<Ingredient>, String> {
+) -> Result<Vec<ShoppingListItem>, String> {
     validate_range(start, end)?;
 
     let entries = calendar_storage::load_meal_entries_in_range(
         pool, SINGLE_USER_ID, start, end
     ).await?;
 
+    // Accumulate in base units (g / ml) keyed by (lowercase_name, canonical_unit).
     let mut aggregated: Vec<Ingredient> = Vec::new();
 
     for entry in entries {
@@ -186,7 +189,66 @@ pub async fn get_shopping_list(
         }
     }
 
-    Ok(aggregated)
+    Ok(aggregated
+        .into_iter()
+        .map(|i| to_display_item(i.name, &i.unit, i.quantity))
+        .collect())
+}
+
+/// Converts an internally-accumulated `(name, base_unit, base_qty)` triple into
+/// a display-ready [`ShoppingListItem`].
+///
+/// `base_unit` must be one of `"g"`, `"ml"`, or an unrecognised passthrough.
+/// Metric quantities are ceiled to a step (10 below the 100-unit threshold,
+/// 100 above it) and expressed in `g`/`kg` or `ml`/`l`. Imperial quantities
+/// are ceiled to the nearest whole `oz` (weight) or `fl oz` (volume).
+fn to_display_item(name: String, base_unit: &str, base_qty: f32) -> ShoppingListItem {
+    match base_unit {
+        "g" => {
+            let (metric_quantity, metric_unit) = if base_qty < 100.0 {
+                (ceil_to(base_qty, 10.0), "g".to_string())
+            } else {
+                (ceil_to(base_qty, 100.0) / 1_000.0, "kg".to_string())
+            };
+            let imperial_quantity = Some((base_qty * 0.035274_f32).ceil());
+            ShoppingListItem {
+                name,
+                metric_quantity,
+                metric_unit,
+                imperial_quantity,
+                imperial_unit: Some("oz".to_string()),
+            }
+        }
+        "ml" => {
+            let (metric_quantity, metric_unit) = if base_qty < 100.0 {
+                (ceil_to(base_qty, 10.0), "ml".to_string())
+            } else {
+                (ceil_to(base_qty, 100.0) / 1_000.0, "l".to_string())
+            };
+            let imperial_quantity = Some((base_qty * 0.033814_f32).ceil());
+            ShoppingListItem {
+                name,
+                metric_quantity,
+                metric_unit,
+                imperial_quantity,
+                imperial_unit: Some("fl oz".to_string()),
+            }
+        }
+        other => ShoppingListItem {
+            name,
+            metric_quantity: base_qty,
+            metric_unit: other.to_string(),
+            imperial_quantity: None,
+            imperial_unit: None,
+        },
+    }
+}
+
+/// Ceils `value` to the nearest multiple of `step`.
+///
+/// The result is always ≥ `value` (i.e. never rounded down).
+fn ceil_to(value: f32, step: f32) -> f32 {
+    (value / step).ceil() * step
 }
 
 /// Maps a unit string to its canonical form and scales the quantity accordingly.

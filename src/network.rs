@@ -320,7 +320,7 @@ pub async fn handle_shopping_list(
     Query(params): Query<DateRangeParams>,
 ) -> impl IntoResponse {
     match calendar_manager::get_shopping_list(&pool, params.start, params.end).await {
-        Ok(ingredients) => (StatusCode::OK, Json(ingredients)).into_response(),
+        Ok(items) => (StatusCode::OK, Json(items)).into_response(),
         Err(err_msg) => {
             tracing::error!("Error generating shopping list: {err_msg}");
             (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": err_msg }))).into_response()
