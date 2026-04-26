@@ -368,11 +368,15 @@ async function loadShoppingList() {
 
       const qtySpan = document.createElement("span");
       qtySpan.className = "text-muted";
-      const qty =
-        ing.quantity % 1 === 0
-          ? ing.quantity
-          : parseFloat(ing.quantity.toFixed(2));
-      qtySpan.textContent = `${qty} ${ing.unit}`;
+      const metricQty =
+        ing.metric_quantity % 1 === 0
+          ? ing.metric_quantity
+          : parseFloat(ing.metric_quantity.toFixed(2));
+      let qtyText = `${metricQty} ${ing.metric_unit}`;
+      if (ing.imperial_quantity != null) {
+        qtyText += ` (${ing.imperial_quantity} ${ing.imperial_unit})`;
+      }
+      qtySpan.textContent = qtyText;
 
       row.appendChild(nameSpan);
       row.appendChild(qtySpan);
