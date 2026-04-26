@@ -46,6 +46,8 @@ async fn build_test_app() -> (Router, SqlitePool) {
         .execute(&pool).await.unwrap();
     sqlx::query(include_str!("../migrations/002_multiple_entries_per_slot.sql"))
         .execute(&pool).await.unwrap();
+    sqlx::query(include_str!("../migrations/003_add_portions_to_meal_plan.sql"))
+        .execute(&pool).await.unwrap();
 
     let hash = auth::hash_password("password").unwrap();
     storage::create_user(&pool, "admin", &hash).await.unwrap();

@@ -58,6 +58,7 @@ async fn main() {
 
     run_migration(&pool, "001", include_str!("../migrations/001_initial.sql")).await;
     run_migration(&pool, "002", include_str!("../migrations/002_multiple_entries_per_slot.sql")).await;
+    run_migration(&pool, "003", include_str!("../migrations/003_add_portions_to_meal_plan.sql")).await;
 
     // Seed the initial user from environment variables if no users exist yet.
     // Set INITIAL_USERNAME and INITIAL_PASSWORD in your .env file before

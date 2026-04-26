@@ -63,7 +63,13 @@ pub struct MealEntry {
     pub date: NaiveDate,
     pub slot: MealSlot,
     pub recipe_id: i64,
+    /// Number of times to multiply ingredient quantities for this entry.
+    /// Defaults to 1 when omitted from the request body.
+    #[serde(default = "default_one")]
+    pub portions: i64,
 }
+
+fn default_one() -> i64 { 1 }
 
 /// A record of a recipe that was actually cooked on a given date.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
