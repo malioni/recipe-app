@@ -9,10 +9,10 @@ use chrono::NaiveDate;
 use serde::Deserialize;
 use sqlx::SqlitePool;
 use tower_sessions::Session;
-use crate::auth::{self, AuthUser, SESSION_USER_ID_KEY};
+use crate::auth::{self, AuthAdmin, AuthUser, SESSION_IS_ADMIN_KEY, SESSION_USER_ID_KEY};
 use crate::manager;
 use crate::calendar_manager;
-use crate::model::{LoginForm, MealEntry, CookedEntry, Recipe};
+use crate::model::{ChangePasswordForm, CreateUserForm, LoginForm, MealEntry, CookedEntry, Recipe};
 
 // ---------------------------------------------------------------------------
 // Auth handlers
@@ -71,7 +71,9 @@ pub async fn handle_login(
         }
     }
 
-    if session.insert(SESSION_USER_ID_KEY, user.id).await.is_err() {
+    if session.insert(SESSION_USER_ID_KEY, user.id).await.is_err()
+        || session.insert(SESSION_IS_ADMIN_KEY, user.is_admin).await.is_err()
+    {
         tracing::error!("Failed to create session for user: {}", user.username);
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -106,18 +108,18 @@ pub async fn handle_index(_auth: AuthUser) -> impl IntoResponse {
 }
 
 pub async fn handle_all_recipes(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(pool): State<SqlitePool>,
 ) -> Json<Vec<Recipe>> {
-    Json(manager::get_all_recipes(&pool).await)
+    Json(manager::get_all_recipes(&pool, auth.user_id).await)
 }
 
 pub async fn handle_recipe(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(pool): State<SqlitePool>,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
-    match manager::get_recipe_by_id(&pool, id).await {
+    match manager::get_recipe_by_id(&pool, auth.user_id, id).await {
         Some(recipe) => (StatusCode::OK, Json(recipe)).into_response(),
         None => (
             StatusCode::NOT_FOUND,
@@ -138,11 +140,11 @@ pub async fn handle_new_recipe_page(_auth: AuthUser) -> impl IntoResponse {
 }
 
 pub async fn handle_add_recipe(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(pool): State<SqlitePool>,
     Json(new_recipe): Json<Recipe>,
 ) -> impl IntoResponse {
-    match manager::add_recipe(&pool, new_recipe).await {
+    match manager::add_recipe(&pool, auth.user_id, new_recipe).await {
         Ok(_) => {
             tracing::info!("Recipe added");
             (StatusCode::CREATED, Json(serde_json::json!({ "status": "created" })))
@@ -155,11 +157,11 @@ pub async fn handle_add_recipe(
 }
 
 pub async fn handle_delete_recipe(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(pool): State<SqlitePool>,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
-    match manager::delete_recipe(&pool, id).await {
+    match manager::delete_recipe(&pool, auth.user_id, id).await {
         Ok(_) => {
             tracing::info!("Recipe {} deleted", id);
             (StatusCode::OK, Json(serde_json::json!({ "status": "deleted" })))
@@ -172,12 +174,12 @@ pub async fn handle_delete_recipe(
 }
 
 pub async fn handle_update_recipe(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(pool): State<SqlitePool>,
     Path(id): Path<i64>,
     Json(updated_recipe): Json<Recipe>,
 ) -> impl IntoResponse {
-    match manager::update_recipe(&pool, id, updated_recipe).await {
+    match manager::update_recipe(&pool, auth.user_id, id, updated_recipe).await {
         Ok(_) => {
             tracing::info!("Recipe {} updated", id);
             (StatusCode::OK, Json(serde_json::json!({ "status": "updated" })))
@@ -226,11 +228,11 @@ pub async fn handle_calendar_page(_auth: AuthUser) -> impl IntoResponse {
 
 /// GET /calendar/entries?start=YYYY-MM-DD&end=YYYY-MM-DD
 pub async fn handle_get_meal_entries(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(pool): State<SqlitePool>,
     Query(params): Query<DateRangeParams>,
 ) -> impl IntoResponse {
-    match calendar_manager::get_meals_in_range(&pool, params.start, params.end).await {
+    match calendar_manager::get_meals_in_range(&pool, auth.user_id, params.start, params.end).await {
         Ok(entries) => (StatusCode::OK, Json(entries)).into_response(),
         Err(err_msg) => {
             tracing::error!("Error fetching meal entries: {err_msg}");
@@ -241,11 +243,11 @@ pub async fn handle_get_meal_entries(
 
 /// POST /calendar/entries
 pub async fn handle_plan_meal(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(pool): State<SqlitePool>,
     Json(entry): Json<MealEntry>,
 ) -> impl IntoResponse {
-    match calendar_manager::plan_meal(&pool, entry.date, entry.slot, entry.recipe_id, entry.portions).await {
+    match calendar_manager::plan_meal(&pool, auth.user_id, entry.date, entry.slot, entry.recipe_id, entry.portions).await {
         Ok(_) => {
             tracing::info!("Meal planned: recipe {} on {}", entry.recipe_id, entry.date);
             (StatusCode::CREATED, Json(serde_json::json!({ "status": "planned" })))
@@ -259,11 +261,11 @@ pub async fn handle_plan_meal(
 
 /// DELETE /calendar/entries?id=<entry_id>
 pub async fn handle_delete_meal_entry(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(pool): State<SqlitePool>,
     Query(params): Query<DeleteMealParams>,
 ) -> impl IntoResponse {
-    match calendar_manager::remove_planned_meal(&pool, params.id).await {
+    match calendar_manager::remove_planned_meal(&pool, auth.user_id, params.id).await {
         Ok(_) => (StatusCode::OK, Json(serde_json::json!({ "status": "deleted" }))),
         Err(err_msg) => {
             tracing::error!("Error deleting meal entry: {err_msg}");
@@ -278,11 +280,11 @@ pub async fn handle_delete_meal_entry(
 
 /// POST /calendar/cooked
 pub async fn handle_mark_cooked(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(pool): State<SqlitePool>,
     Json(entry): Json<CookedEntry>,
 ) -> impl IntoResponse {
-    match calendar_manager::mark_as_cooked(&pool, entry.date, entry.recipe_id).await {
+    match calendar_manager::mark_as_cooked(&pool, auth.user_id, entry.date, entry.recipe_id).await {
         Ok(_) => {
             tracing::info!("Recipe {} marked cooked on {}", entry.recipe_id, entry.date);
             (StatusCode::CREATED, Json(serde_json::json!({ "status": "logged" })))
@@ -296,11 +298,11 @@ pub async fn handle_mark_cooked(
 
 /// GET /calendar/cooked?start=YYYY-MM-DD&end=YYYY-MM-DD
 pub async fn handle_get_cooked_entries(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(pool): State<SqlitePool>,
     Query(params): Query<DateRangeParams>,
 ) -> impl IntoResponse {
-    match calendar_manager::get_cooked_in_range(&pool, params.start, params.end).await {
+    match calendar_manager::get_cooked_in_range(&pool, auth.user_id, params.start, params.end).await {
         Ok(entries) => (StatusCode::OK, Json(entries)).into_response(),
         Err(err_msg) => {
             tracing::error!("Error fetching cooked entries: {err_msg}");
@@ -315,15 +317,80 @@ pub async fn handle_get_cooked_entries(
 
 /// GET /calendar/shopping-list?start=YYYY-MM-DD&end=YYYY-MM-DD
 pub async fn handle_shopping_list(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(pool): State<SqlitePool>,
     Query(params): Query<DateRangeParams>,
 ) -> impl IntoResponse {
-    match calendar_manager::get_shopping_list(&pool, params.start, params.end).await {
+    match calendar_manager::get_shopping_list(&pool, auth.user_id, params.start, params.end).await {
         Ok(items) => (StatusCode::OK, Json(items)).into_response(),
         Err(err_msg) => {
             tracing::error!("Error generating shopping list: {err_msg}");
             (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": err_msg }))).into_response()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Admin — user management
+// ---------------------------------------------------------------------------
+
+/// GET /admin — serves the admin user management page.
+pub async fn handle_admin_page(_auth: AuthAdmin) -> impl IntoResponse {
+    match tokio::fs::read_to_string("html/admin.html").await {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to read admin.html: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, Html("<h1>Internal Server Error</h1>".to_string())).into_response()
+        }
+    }
+}
+
+/// GET /admin/users — returns all users as JSON (no password hashes).
+pub async fn handle_admin_list_users(
+    _auth: AuthAdmin,
+    State(pool): State<SqlitePool>,
+) -> impl IntoResponse {
+    match manager::admin_list_users(&pool).await {
+        Ok(users) => (StatusCode::OK, Json(users)).into_response(),
+        Err(err_msg) => {
+            tracing::error!("Error listing users: {err_msg}");
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": err_msg }))).into_response()
+        }
+    }
+}
+
+/// POST /admin/users — creates a new non-admin user account.
+pub async fn handle_admin_create_user(
+    _auth: AuthAdmin,
+    State(pool): State<SqlitePool>,
+    Json(form): Json<CreateUserForm>,
+) -> impl IntoResponse {
+    match manager::admin_create_user(&pool, &form.username, &form.password).await {
+        Ok(_) => {
+            tracing::info!("Admin created user: {}", form.username);
+            (StatusCode::CREATED, Json(serde_json::json!({ "status": "created" })))
+        }
+        Err(err_msg) => {
+            tracing::error!("Error creating user: {err_msg}");
+            (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": err_msg })))
+        }
+    }
+}
+
+/// POST /admin/users/password — changes a user's password.
+pub async fn handle_admin_change_password(
+    _auth: AuthAdmin,
+    State(pool): State<SqlitePool>,
+    Json(form): Json<ChangePasswordForm>,
+) -> impl IntoResponse {
+    match manager::admin_change_password(&pool, form.target_user_id, &form.new_password).await {
+        Ok(_) => {
+            tracing::info!("Admin changed password for user_id: {}", form.target_user_id);
+            (StatusCode::OK, Json(serde_json::json!({ "status": "updated" })))
+        }
+        Err(err_msg) => {
+            tracing::error!("Error changing password: {err_msg}");
+            (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": err_msg })))
         }
     }
 }
@@ -363,6 +430,8 @@ mod tests {
             .execute(&pool).await.expect("Failed to run migration 002");
         sqlx::query(include_str!("../migrations/003_add_portions_to_meal_plan.sql"))
             .execute(&pool).await.expect("Failed to run migration 003");
+        sqlx::query(include_str!("../migrations/004_add_is_admin_to_users.sql"))
+            .execute(&pool).await.expect("Failed to run migration 004");
         sqlx::query(
             "INSERT INTO users (id, username, password_hash) VALUES (1, 'test', 'placeholder')"
         )
@@ -397,7 +466,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_recipe_with_invalid_id() {
         let pool = setup().await;
-        let response = handle_recipe(AuthUser { user_id: 1 }, State(pool), Path(999_999))
+        let response = handle_recipe(AuthUser { user_id: 1 }, State(pool.clone()), Path(999_999))
             .await
             .into_response();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);

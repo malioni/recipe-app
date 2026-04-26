@@ -48,9 +48,12 @@ async fn build_test_app() -> (Router, SqlitePool) {
         .execute(&pool).await.unwrap();
     sqlx::query(include_str!("../migrations/003_add_portions_to_meal_plan.sql"))
         .execute(&pool).await.unwrap();
+    sqlx::query(include_str!("../migrations/004_add_is_admin_to_users.sql"))
+        .execute(&pool).await.unwrap();
 
     let hash = auth::hash_password("password").unwrap();
-    storage::create_user(&pool, "admin", &hash).await.unwrap();
+    let admin_id = storage::create_user(&pool, "admin", &hash).await.unwrap();
+    storage::promote_user_to_admin(&pool, admin_id).await.unwrap();
 
     let session_store = SqliteStore::new(pool.clone());
     session_store.migrate().await.unwrap();
@@ -74,6 +77,9 @@ async fn build_test_app() -> (Router, SqlitePool) {
         .route("/calendar/cooked", get(network::handle_get_cooked_entries)
             .post(network::handle_mark_cooked))
         .route("/calendar/shopping-list", get(network::handle_shopping_list))
+        .route("/admin", get(network::handle_admin_page))
+        .route("/admin/users", get(network::handle_admin_list_users).post(network::handle_admin_create_user))
+        .route("/admin/users/password", post(network::handle_admin_change_password))
         .fallback(network::handle_404)
         .layer(session_layer)
         .layer(DefaultBodyLimit::max(64 * 1024))
@@ -564,6 +570,8 @@ async fn test_migration_idempotent() {
             for (version, sql) in [
                 ("001", include_str!("../migrations/001_initial.sql")),
                 ("002", include_str!("../migrations/002_multiple_entries_per_slot.sql")),
+                ("003", include_str!("../migrations/003_add_portions_to_meal_plan.sql")),
+                ("004", include_str!("../migrations/004_add_is_admin_to_users.sql")),
             ] {
                 if !storage::is_migration_applied(&pool, version).await.expect("is_migration_applied") {
                     sqlx::query(sql).execute(&pool).await.expect("run migration sql");

@@ -4,7 +4,7 @@
 /// about SQL queries, table names, or how recipes are physically stored.
 /// When the backend changes (e.g. SQLite → Postgres), only this file changes.
 use sqlx::SqlitePool;
-use crate::model::{Ingredient, Recipe, User};
+use crate::model::{Ingredient, Recipe, User, UserInfo};
 
 // ---------------------------------------------------------------------------
 // Users
@@ -20,7 +20,7 @@ use crate::model::{Ingredient, Recipe, User};
 /// Returns `Err` if the query fails.
 pub async fn load_user_by_username(pool: &SqlitePool, username: &str) -> Result<Option<User>, String> {
     let row = sqlx::query!(
-        "SELECT id, username, password_hash FROM users WHERE username = ?",
+        "SELECT id, username, password_hash, is_admin FROM users WHERE username = ?",
         username
     )
     .fetch_optional(pool)
@@ -31,7 +31,96 @@ pub async fn load_user_by_username(pool: &SqlitePool, username: &str) -> Result<
         id: r.id.unwrap_or(0),
         username: r.username,
         password_hash: r.password_hash,
+        is_admin: r.is_admin != 0,
     }))
+}
+
+/// Loads a user by their primary key.
+///
+/// Returns `None` if no user exists with that ID.
+///
+/// # Errors
+///
+/// Returns `Err` if the query fails.
+pub async fn load_user_by_id(pool: &SqlitePool, user_id: i64) -> Result<Option<User>, String> {
+    let row = sqlx::query!(
+        "SELECT id, username, password_hash, is_admin FROM users WHERE id = ?",
+        user_id
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Failed to query user: {e}"))?;
+
+    Ok(row.map(|r| User {
+        id: r.id,
+        username: r.username,
+        password_hash: r.password_hash,
+        is_admin: r.is_admin != 0,
+    }))
+}
+
+/// Returns all users as public `UserInfo` records (no password hashes).
+///
+/// # Errors
+///
+/// Returns `Err` if the query fails.
+pub async fn load_all_users(pool: &SqlitePool) -> Result<Vec<UserInfo>, String> {
+    let rows = sqlx::query!(
+        "SELECT id, username, is_admin, created_at FROM users ORDER BY id"
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to query users: {e}"))?;
+
+    Ok(rows.into_iter().map(|r| UserInfo {
+        id: r.id,
+        username: r.username,
+        is_admin: r.is_admin != 0,
+        created_at: r.created_at,
+    }).collect())
+}
+
+/// Sets `is_admin = 1` for the given user.
+///
+/// Called once at first-boot after the initial user is created, so the
+/// seeded account has admin privileges without needing a separate step.
+///
+/// # Errors
+///
+/// Returns `Err` if the query fails.
+pub async fn promote_user_to_admin(pool: &SqlitePool, user_id: i64) -> Result<(), String> {
+    sqlx::query!(
+        "UPDATE users SET is_admin = 1 WHERE id = ?",
+        user_id
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to promote user to admin: {e}"))?;
+
+    Ok(())
+}
+
+/// Updates the stored password hash for the given user.
+///
+/// The caller is responsible for hashing the new password before calling this.
+///
+/// # Errors
+///
+/// Returns `Err` if no user exists at `user_id` or the query fails.
+pub async fn update_password(pool: &SqlitePool, user_id: i64, password_hash: &str) -> Result<(), String> {
+    let result = sqlx::query!(
+        "UPDATE users SET password_hash = ? WHERE id = ?",
+        password_hash,
+        user_id
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to update password: {e}"))?;
+
+    if result.rows_affected() == 0 {
+        return Err(format!("User with ID {} not found", user_id));
+    }
+    Ok(())
 }
 
 /// Inserts a new user with a pre-hashed password.
@@ -76,15 +165,18 @@ pub async fn any_users_exist(pool: &SqlitePool) -> Result<bool, String> {
 // Recipes
 // ---------------------------------------------------------------------------
 
-/// Loads a single recipe by its ID.
+/// Loads a single recipe by its ID, scoped to the owning user.
+///
+/// Returns `Err` if the recipe does not exist or belongs to a different user.
 ///
 /// # Errors
 ///
-/// Returns `Err` if the query fails or no recipe exists at the given ID.
-pub async fn load_recipe(pool: &SqlitePool, id: i64) -> Result<Recipe, String> {
+/// Returns `Err` if the query fails or no matching recipe exists.
+pub async fn load_recipe(pool: &SqlitePool, user_id: i64, id: i64) -> Result<Recipe, String> {
     let row = sqlx::query!(
-        "SELECT id, name, source_url, ingredients, instructions FROM recipes WHERE id = ?",
-        id
+        "SELECT id, name, source_url, ingredients, instructions FROM recipes WHERE id = ? AND user_id = ?",
+        id,
+        user_id
     )
     .fetch_optional(pool)
     .await
@@ -155,12 +247,14 @@ pub async fn add_recipe(pool: &SqlitePool, user_id: i64, recipe: &Recipe) -> Res
     Ok(result.last_insert_rowid())
 }
 
-/// Replaces the recipe at `id` with the provided data.
+/// Replaces the recipe at `id` with the provided data, scoped to the owning user.
+///
+/// Returns `Err` if no recipe exists at `id` for that user, or the update query fails.
 ///
 /// # Errors
 ///
-/// Returns `Err` if no recipe exists at `id` or the update query fails.
-pub async fn save_recipe(pool: &SqlitePool, id: i64, recipe: &Recipe) -> Result<(), String> {
+/// Returns `Err` if the query fails or `rows_affected == 0`.
+pub async fn save_recipe(pool: &SqlitePool, user_id: i64, id: i64, recipe: &Recipe) -> Result<(), String> {
     let ingredients_json = serde_json::to_string(&recipe.ingredients)
         .map_err(|e| format!("Failed to serialize ingredients: {e}"))?;
     let instructions_json = serde_json::to_string(&recipe.instructions)
@@ -168,12 +262,13 @@ pub async fn save_recipe(pool: &SqlitePool, id: i64, recipe: &Recipe) -> Result<
 
     let result = sqlx::query!(
         "UPDATE recipes SET name = ?, source_url = ?, ingredients = ?, instructions = ?
-         WHERE id = ?",
+         WHERE id = ? AND user_id = ?",
         recipe.name,
         recipe.source_url,
         ingredients_json,
         instructions_json,
         id,
+        user_id,
     )
     .execute(pool)
     .await
@@ -185,16 +280,17 @@ pub async fn save_recipe(pool: &SqlitePool, id: i64, recipe: &Recipe) -> Result<
     Ok(())
 }
 
-/// Deletes the recipe at `id`.
+/// Deletes the recipe at `id`, scoped to the owning user.
 ///
 /// meal_plan and cooked_log entries referencing this recipe are removed
-/// automatically via ON DELETE CASCADE.
+/// automatically via ON DELETE CASCADE. Deleting a non-existent id or one
+/// owned by a different user is a no-op — idempotent by design.
 ///
 /// # Errors
 ///
-/// Returns `Err` if no recipe exists at `id` or the delete query fails.
-pub async fn delete_recipe(pool: &SqlitePool, id: i64) -> Result<(), String> {
-    sqlx::query!("DELETE FROM recipes WHERE id = ?", id)
+/// Returns `Err` if the delete query fails.
+pub async fn delete_recipe(pool: &SqlitePool, user_id: i64, id: i64) -> Result<(), String> {
+    sqlx::query!("DELETE FROM recipes WHERE id = ? AND user_id = ?", id, user_id)
         .execute(pool)
         .await
         .map_err(|e| format!("Failed to delete recipe: {e}"))?;
@@ -295,6 +391,10 @@ mod tests {
             .execute(&pool).await.expect("Failed to run migration 001");
         sqlx::query(include_str!("../migrations/002_multiple_entries_per_slot.sql"))
             .execute(&pool).await.expect("Failed to run migration 002");
+        sqlx::query(include_str!("../migrations/003_add_portions_to_meal_plan.sql"))
+            .execute(&pool).await.expect("Failed to run migration 003");
+        sqlx::query(include_str!("../migrations/004_add_is_admin_to_users.sql"))
+            .execute(&pool).await.expect("Failed to run migration 004");
         sqlx::query(
             "INSERT INTO users (id, username, password_hash) VALUES (1, 'test', 'placeholder')"
         )
@@ -346,7 +446,7 @@ mod tests {
             instructions: vec!["Boil water".to_string()],
         };
         let id = add_recipe(&pool, 1, &recipe).await.expect("Failed to add recipe");
-        let loaded = load_recipe(&pool, id).await.expect("Failed to load recipe");
+        let loaded = load_recipe(&pool, 1, id).await.expect("Failed to load recipe");
         assert_eq!(loaded.name, "Pasta");
         assert_eq!(loaded.instructions, vec!["Boil water"]);
     }
@@ -354,7 +454,7 @@ mod tests {
     #[tokio::test]
     async fn test_load_recipe_invalid_id() {
         let pool = setup().await;
-        let result = load_recipe(&pool, 999_999).await;
+        let result = load_recipe(&pool, 1, 999_999).await;
         assert!(result.is_err(), "Expected an error for a missing ID");
     }
 
@@ -382,8 +482,8 @@ mod tests {
             ingredients: vec![], instructions: vec![],
         };
         let id = add_recipe(&pool, 1, &recipe).await.expect("Failed to add recipe");
-        delete_recipe(&pool, id).await.expect("Failed to delete recipe");
-        assert!(load_recipe(&pool, id).await.is_err());
+        delete_recipe(&pool, 1, id).await.expect("Failed to delete recipe");
+        assert!(load_recipe(&pool, 1, id).await.is_err());
     }
 
     #[tokio::test]
@@ -401,8 +501,8 @@ mod tests {
             ingredients: vec![],
             instructions: vec![],
         };
-        save_recipe(&pool, id, &updated).await.expect("Failed to update recipe");
-        let loaded = load_recipe(&pool, id).await.expect("Failed to load recipe");
+        save_recipe(&pool, 1, id, &updated).await.expect("Failed to update recipe");
+        let loaded = load_recipe(&pool, 1, id).await.expect("Failed to load recipe");
         assert_eq!(loaded.name, "Updated");
         assert_eq!(loaded.source_url, Some("https://updated.com".to_string()));
     }
@@ -413,6 +513,10 @@ mod tests {
         sqlx::query(include_str!("../migrations/001_initial.sql"))
             .execute(&pool).await.unwrap();
         sqlx::query(include_str!("../migrations/002_multiple_entries_per_slot.sql"))
+            .execute(&pool).await.unwrap();
+        sqlx::query(include_str!("../migrations/003_add_portions_to_meal_plan.sql"))
+            .execute(&pool).await.unwrap();
+        sqlx::query(include_str!("../migrations/004_add_is_admin_to_users.sql"))
             .execute(&pool).await.unwrap();
         let id = create_user(&pool, "alice", "hash123").await.expect("Failed to create user");
         assert!(id > 0);
@@ -436,7 +540,7 @@ mod tests {
             id: 0, name: "Ghost".to_string(), source_url: None,
             ingredients: vec![], instructions: vec![],
         };
-        let result = save_recipe(&pool, 999_999, &recipe).await;
+        let result = save_recipe(&pool, 1, 999_999, &recipe).await;
         assert!(result.is_err(), "Updating a non-existent recipe should fail");
     }
 
@@ -444,7 +548,7 @@ mod tests {
     async fn test_delete_recipe_not_found() {
         let pool = setup().await;
         // Deleting a non-existent ID is a no-op — idempotent by design.
-        assert!(delete_recipe(&pool, 999_999).await.is_ok());
+        assert!(delete_recipe(&pool, 1, 999_999).await.is_ok());
     }
 
     #[tokio::test]
@@ -461,7 +565,7 @@ mod tests {
             instructions: vec!["Boil water".to_string(), "Add salt".to_string()],
         };
         let id = add_recipe(&pool, 1, &recipe).await.unwrap();
-        let loaded = load_recipe(&pool, id).await.unwrap();
+        let loaded = load_recipe(&pool, 1, id).await.unwrap();
         assert_eq!(loaded.ingredients.len(), 2);
         assert_eq!(loaded.ingredients[0].name, "Water");
         assert!((loaded.ingredients[0].quantity - 1.5).abs() < f32::EPSILON);

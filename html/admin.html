@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin — User Management</title>
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+      integrity="sha384-9ndCyUaIbzAi2FUVXJi0CjmCapSmO7SnpJef0486qhLnuZ2cdeRhO02iuK6FUUVM"
+      crossorigin="anonymous"
+    />
+  </head>
+  <body class="bg-light py-4">
+    <div class="container" style="max-width: 720px">
+      <div class="d-flex align-items-center justify-content-between mb-4">
+        <h1 class="mb-0">User Management</h1>
+        <a href="/" class="btn btn-outline-secondary btn-sm">Back to recipes</a>
+      </div>
+
+      <!-- Alert area -->
+      <div id="alert-area"></div>
+
+      <!-- User list -->
+      <div class="card mb-4">
+        <div class="card-header">Users</div>
+        <div class="card-body p-0">
+          <table class="table table-striped mb-0" id="user-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Username</th>
+                <th>Admin</th>
+                <th>Created</th>
+              </tr>
+            </thead>
+            <tbody id="user-rows">
+              <tr><td colspan="4" class="text-center text-muted py-3">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Create user -->
+      <div class="card mb-4">
+        <div class="card-header">Create user</div>
+        <div class="card-body">
+          <form id="create-form" class="row g-3">
+            <div class="col-sm-5">
+              <label for="new-username" class="form-label">Username</label>
+              <input type="text" class="form-control" id="new-username" required maxlength="50" />
+            </div>
+            <div class="col-sm-5">
+              <label for="new-password" class="form-label">Password</label>
+              <input type="password" class="form-control" id="new-password" required minlength="8" />
+            </div>
+            <div class="col-sm-2 d-flex align-items-end">
+              <button type="submit" class="btn btn-primary w-100">Create</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Change password -->
+      <div class="card mb-4">
+        <div class="card-header">Change password</div>
+        <div class="card-body">
+          <form id="password-form" class="row g-3">
+            <div class="col-sm-4">
+              <label for="target-user-id" class="form-label">User ID</label>
+              <input type="number" class="form-control" id="target-user-id" required min="1" />
+            </div>
+            <div class="col-sm-5">
+              <label for="change-password" class="form-label">New password</label>
+              <input type="password" class="form-control" id="change-password" required minlength="8" />
+            </div>
+            <div class="col-sm-3 d-flex align-items-end">
+              <button type="submit" class="btn btn-warning w-100">Change</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const alertArea = document.getElementById('alert-area');
+
+      function showAlert(msg, type = 'success') {
+        alertArea.innerHTML = `<div class="alert alert-${type} alert-dismissible fade show" role="alert">
+          ${msg}
+          <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>`;
+      }
+
+      async function loadUsers() {
+        const res = await fetch('/admin/users');
+        if (!res.ok) { showAlert('Failed to load users', 'danger'); return; }
+        const users = await res.json();
+        const tbody = document.getElementById('user-rows');
+        if (users.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-3">No users</td></tr>';
+          return;
+        }
+        tbody.innerHTML = users.map(u => `
+          <tr>
+            <td>${u.id}</td>
+            <td>${u.username}</td>
+            <td>${u.is_admin ? '<span class="badge bg-danger">admin</span>' : '<span class="badge bg-secondary">user</span>'}</td>
+            <td>${u.created_at}</td>
+          </tr>`).join('');
+      }
+
+      document.getElementById('create-form').addEventListener('submit', async e => {
+        e.preventDefault();
+        const res = await fetch('/admin/users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: document.getElementById('new-username').value,
+            password: document.getElementById('new-password').value,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showAlert(`User created`);
+          e.target.reset();
+          loadUsers();
+        } else {
+          showAlert(data.error || 'Failed to create user', 'danger');
+        }
+      });
+
+      document.getElementById('password-form').addEventListener('submit', async e => {
+        e.preventDefault();
+        const res = await fetch('/admin/users/password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            target_user_id: parseInt(document.getElementById('target-user-id').value, 10),
+            new_password: document.getElementById('change-password').value,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showAlert('Password updated');
+          e.target.reset();
+        } else {
+          showAlert(data.error || 'Failed to change password', 'danger');
+        }
+      });
+
+      loadUsers();
+    </script>
+  </body>
+</html>

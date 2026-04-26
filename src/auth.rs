@@ -18,13 +18,16 @@ use argon2::{
 use axum::{
     async_trait,
     extract::FromRequestParts,
-    http::request::Parts,
+    http::{request::Parts, StatusCode},
     response::{IntoResponse, Redirect, Response},
 };
 use tower_sessions::Session;
 
 /// The session key under which the authenticated user's ID is stored.
 pub const SESSION_USER_ID_KEY: &str = "user_id";
+
+/// The session key under which the authenticated user's admin flag is stored.
+pub const SESSION_IS_ADMIN_KEY: &str = "is_admin";
 
 // ---------------------------------------------------------------------------
 // Password hashing
@@ -78,9 +81,19 @@ pub struct AuthUser {
 /// is a browser-facing app.
 pub struct AuthRedirect;
 
+/// The error type returned when an authenticated user lacks admin privileges.
+/// Returns 403 Forbidden rather than redirecting to login.
+pub struct AuthForbidden;
+
 impl IntoResponse for AuthRedirect {
     fn into_response(self) -> Response {
         Redirect::to("/login").into_response()
+    }
+}
+
+impl IntoResponse for AuthForbidden {
+    fn into_response(self) -> Response {
+        (StatusCode::FORBIDDEN, "Forbidden").into_response()
     }
 }
 
@@ -107,5 +120,46 @@ where
             .ok_or(AuthRedirect)?;
 
         Ok(AuthUser { user_id })
+    }
+}
+
+/// Represents an authenticated admin user extracted from the session.
+///
+/// Add this as a parameter to any handler that requires admin privileges.
+/// Returns 403 Forbidden if the session is missing, expired, or the user
+/// does not have `is_admin = true`. The handler code never runs in that case.
+pub struct AuthAdmin {
+    pub user_id: i64,
+}
+
+#[async_trait]
+impl<S> FromRequestParts<S> for AuthAdmin
+where
+    S: Send + Sync,
+{
+    type Rejection = AuthForbidden;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let session = Session::from_request_parts(parts, state)
+            .await
+            .map_err(|_| AuthForbidden)?;
+
+        let user_id: i64 = session
+            .get(SESSION_USER_ID_KEY)
+            .await
+            .map_err(|_| AuthForbidden)?
+            .ok_or(AuthForbidden)?;
+
+        let is_admin: bool = session
+            .get(SESSION_IS_ADMIN_KEY)
+            .await
+            .map_err(|_| AuthForbidden)?
+            .unwrap_or(false);
+
+        if !is_admin {
+            return Err(AuthForbidden);
+        }
+
+        Ok(AuthAdmin { user_id })
     }
 }

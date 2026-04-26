@@ -108,6 +108,16 @@ pub struct User {
     pub id: i64,
     pub username: String,
     pub password_hash: String,
+    pub is_admin: bool,
+}
+
+/// A user record safe to return over the API — no password hash.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct UserInfo {
+    pub id: i64,
+    pub username: String,
+    pub is_admin: bool,
+    pub created_at: String,
 }
 
 /// The form payload submitted on the login page.
@@ -115,6 +125,20 @@ pub struct User {
 pub struct LoginForm {
     pub username: String,
     pub password: String,
+}
+
+/// Admin form payload for creating a new user account.
+#[derive(Deserialize, Debug)]
+pub struct CreateUserForm {
+    pub username: String,
+    pub password: String,
+}
+
+/// Admin form payload for changing a user's password.
+#[derive(Deserialize, Debug)]
+pub struct ChangePasswordForm {
+    pub target_user_id: i64,
+    pub new_password: String,
 }
 
 fn is_finite_positive(val: f32) -> Result<(), validator::ValidationError> {

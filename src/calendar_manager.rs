@@ -9,7 +9,6 @@ use chrono::NaiveDate;
 use crate::model::{CookedEntry, Ingredient, MealEntry, MealSlot, ShoppingListItem};
 use crate::calendar_storage;
 use crate::storage;
-use crate::SINGLE_USER_ID;
 
 /// Maximum number of meal plan entries a single user may have at once.
 #[cfg(not(test))]
@@ -30,29 +29,32 @@ const MAX_PORTIONS: i64 = 10;
 // Meal plan
 // ---------------------------------------------------------------------------
 
-/// Returns all planned meals within `[start, end]` (inclusive).
+/// Returns all planned meals within `[start, end]` (inclusive) for the given user.
 ///
 /// # Errors
 ///
 /// Returns `Err` if the date range is invalid or the query fails.
 pub async fn get_meals_in_range(
     pool: &SqlitePool,
+    user_id: i64,
     start: NaiveDate,
     end: NaiveDate,
 ) -> Result<Vec<MealEntry>, String> {
     validate_range(start, end)?;
-    calendar_storage::load_meal_entries_in_range(pool, SINGLE_USER_ID, start, end).await
+    calendar_storage::load_meal_entries_in_range(pool, user_id, start, end).await
 }
 
-/// Plans a recipe for a specific date and slot.
+/// Plans a recipe for a specific date and slot for the given user.
 ///
 /// Multiple entries per slot are allowed up to `MAX_ENTRIES_PER_SLOT`.
 ///
 /// # Errors
 ///
-/// Returns `Err` if the recipe ID does not exist, a quota is exceeded, or the query fails.
+/// Returns `Err` if the recipe ID does not exist or is owned by a different user,
+/// a quota is exceeded, or the query fails.
 pub async fn plan_meal(
     pool: &SqlitePool,
+    user_id: i64,
     date: NaiveDate,
     slot: MealSlot,
     recipe_id: i64,
@@ -62,13 +64,13 @@ pub async fn plan_meal(
         return Err(format!("portions must be between 1 and {MAX_PORTIONS}"));
     }
 
-    // Verify the recipe exists before linking it.
-    storage::load_recipe(pool, recipe_id).await
+    // Verify the recipe exists and belongs to this user before linking it.
+    storage::load_recipe(pool, user_id, recipe_id).await
         .map_err(|_| format!("Recipe with ID {} not found", recipe_id))?;
 
     // Enforce per-user meal plan quota. Use a large window to count all entries.
     let all_entries = calendar_storage::load_meal_entries_in_range(
-        pool, SINGLE_USER_ID,
+        pool, user_id,
         chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
         chrono::NaiveDate::from_ymd_opt(9999, 12, 31).unwrap(),
     ).await?;
@@ -77,61 +79,65 @@ pub async fn plan_meal(
     }
 
     // Enforce per-slot limit.
-    let slot_count = calendar_storage::count_slot_entries(pool, SINGLE_USER_ID, date, &slot).await?;
+    let slot_count = calendar_storage::count_slot_entries(pool, user_id, date, &slot).await?;
     if slot_count >= MAX_ENTRIES_PER_SLOT {
         return Err(format!("Slot limit of {} entries reached", MAX_ENTRIES_PER_SLOT));
     }
 
     let entry = MealEntry { id: None, date, slot, recipe_id, portions };
-    calendar_storage::add_meal_entry(pool, SINGLE_USER_ID, &entry).await
+    calendar_storage::add_meal_entry(pool, user_id, &entry).await
 }
 
-/// Removes a planned meal entry by its primary key.
+/// Removes a planned meal entry by its primary key, scoped to the owning user.
 ///
-/// Deleting a non-existent id is a no-op — idempotent by design.
+/// Deleting a non-existent id or one owned by a different user is a no-op —
+/// idempotent by design.
 ///
 /// # Errors
 ///
 /// Returns `Err` if the query fails.
-pub async fn remove_planned_meal(pool: &SqlitePool, id: i64) -> Result<(), String> {
-    calendar_storage::delete_meal_entry(pool, SINGLE_USER_ID, id).await
+pub async fn remove_planned_meal(pool: &SqlitePool, user_id: i64, id: i64) -> Result<(), String> {
+    calendar_storage::delete_meal_entry(pool, user_id, id).await
 }
 
 // ---------------------------------------------------------------------------
 // Cooked log
 // ---------------------------------------------------------------------------
 
-/// Marks a recipe as cooked on the given date.
+/// Marks a recipe as cooked on the given date for the given user.
 ///
 /// Duplicate entries for the same date and recipe are silently ignored.
 ///
 /// # Errors
 ///
-/// Returns `Err` if the recipe ID does not exist or the query fails.
+/// Returns `Err` if the recipe ID does not exist or belongs to a different user,
+/// or the query fails.
 pub async fn mark_as_cooked(
     pool: &SqlitePool,
+    user_id: i64,
     date: NaiveDate,
     recipe_id: i64,
 ) -> Result<(), String> {
-    storage::load_recipe(pool, recipe_id).await
+    storage::load_recipe(pool, user_id, recipe_id).await
         .map_err(|_| format!("Recipe with ID {} not found", recipe_id))?;
 
     let entry = CookedEntry { date, recipe_id };
-    calendar_storage::add_cooked_entry(pool, SINGLE_USER_ID, &entry).await
+    calendar_storage::add_cooked_entry(pool, user_id, &entry).await
 }
 
-/// Returns all cooked entries within `[start, end]` (inclusive).
+/// Returns all cooked entries within `[start, end]` (inclusive) for the given user.
 ///
 /// # Errors
 ///
 /// Returns `Err` if the date range is invalid or the query fails.
 pub async fn get_cooked_in_range(
     pool: &SqlitePool,
+    user_id: i64,
     start: NaiveDate,
     end: NaiveDate,
 ) -> Result<Vec<CookedEntry>, String> {
     validate_range(start, end)?;
-    calendar_storage::load_cooked_entries_in_range(pool, SINGLE_USER_ID, start, end).await
+    calendar_storage::load_cooked_entries_in_range(pool, user_id, start, end).await
 }
 
 // ---------------------------------------------------------------------------
@@ -156,20 +162,21 @@ pub async fn get_cooked_in_range(
 /// referenced recipe no longer exists.
 pub async fn get_shopping_list(
     pool: &SqlitePool,
+    user_id: i64,
     start: NaiveDate,
     end: NaiveDate,
 ) -> Result<Vec<ShoppingListItem>, String> {
     validate_range(start, end)?;
 
     let entries = calendar_storage::load_meal_entries_in_range(
-        pool, SINGLE_USER_ID, start, end
+        pool, user_id, start, end
     ).await?;
 
     // Accumulate in base units (g / ml) keyed by (lowercase_name, canonical_unit).
     let mut aggregated: Vec<Ingredient> = Vec::new();
 
     for entry in entries {
-        let recipe = storage::load_recipe(pool, entry.recipe_id).await
+        let recipe = storage::load_recipe(pool, user_id, entry.recipe_id).await
             .map_err(|_| format!("Recipe with ID {} not found", entry.recipe_id))?;
 
         let scale = entry.portions as f32;
@@ -308,6 +315,8 @@ mod tests {
             .execute(&pool).await.unwrap();
         sqlx::query(include_str!("../migrations/003_add_portions_to_meal_plan.sql"))
             .execute(&pool).await.unwrap();
+        sqlx::query(include_str!("../migrations/004_add_is_admin_to_users.sql"))
+            .execute(&pool).await.unwrap();
         sqlx::query(
             "INSERT INTO users (id, username, password_hash) VALUES (1, 'test', 'placeholder')"
         )
@@ -345,8 +354,8 @@ mod tests {
     async fn test_plan_meal_happy_path() {
         let pool = setup().await;
         let date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
-        plan_meal(&pool, date, MealSlot::Lunch, 1, 1).await.expect("plan_meal should succeed");
-        let meals = get_meals_in_range(&pool, date, date).await.unwrap();
+        plan_meal(&pool, 1, date, MealSlot::Lunch, 1, 1).await.expect("plan_meal should succeed");
+        let meals = get_meals_in_range(&pool, 1, date, date).await.unwrap();
         assert_eq!(meals.len(), 1);
         assert_eq!(meals[0].recipe_id, 1);
         assert_eq!(meals[0].slot, MealSlot::Lunch);
@@ -356,7 +365,7 @@ mod tests {
     async fn test_plan_meal_invalid_recipe_id() {
         let pool = setup().await;
         let date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
-        let result = plan_meal(&pool, date, MealSlot::Lunch, 999_999, 1).await;
+        let result = plan_meal(&pool, 1, date, MealSlot::Lunch, 999_999, 1).await;
         assert!(result.is_err(), "Planning with a non-existent recipe should fail");
     }
 
@@ -364,11 +373,11 @@ mod tests {
     async fn test_remove_planned_meal() {
         let pool = setup().await;
         let date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
-        plan_meal(&pool, date, MealSlot::Dinner, 1, 1).await.unwrap();
-        let meals = get_meals_in_range(&pool, date, date).await.unwrap();
+        plan_meal(&pool, 1, date, MealSlot::Dinner, 1, 1).await.unwrap();
+        let meals = get_meals_in_range(&pool, 1, date, date).await.unwrap();
         let id = meals[0].id.unwrap();
-        remove_planned_meal(&pool, id).await.expect("Remove should succeed");
-        let meals = get_meals_in_range(&pool, date, date).await.unwrap();
+        remove_planned_meal(&pool, 1, id).await.expect("Remove should succeed");
+        let meals = get_meals_in_range(&pool, 1, date, date).await.unwrap();
         assert!(meals.is_empty());
     }
 
@@ -376,15 +385,15 @@ mod tests {
     async fn test_remove_planned_meal_not_found() {
         let pool = setup().await;
         // Removing a non-existent id is a no-op — idempotent by design.
-        assert!(remove_planned_meal(&pool, 999_999).await.is_ok());
+        assert!(remove_planned_meal(&pool, 1, 999_999).await.is_ok());
     }
 
     #[tokio::test]
     async fn test_mark_as_cooked_happy_path() {
         let pool = setup().await;
         let date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
-        mark_as_cooked(&pool, date, 1).await.expect("mark_as_cooked should succeed");
-        let cooked = get_cooked_in_range(&pool, date, date).await.unwrap();
+        mark_as_cooked(&pool, 1, date, 1).await.expect("mark_as_cooked should succeed");
+        let cooked = get_cooked_in_range(&pool, 1, date, date).await.unwrap();
         assert_eq!(cooked.len(), 1);
         assert_eq!(cooked[0].recipe_id, 1);
     }
@@ -393,7 +402,7 @@ mod tests {
     async fn test_mark_as_cooked_invalid_recipe() {
         let pool = setup().await;
         let date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
-        let result = mark_as_cooked(&pool, date, 999_999).await;
+        let result = mark_as_cooked(&pool, 1, date, 999_999).await;
         assert!(result.is_err(), "Marking a non-existent recipe as cooked should fail");
     }
 
@@ -402,7 +411,7 @@ mod tests {
         let pool = setup().await;
         let start = NaiveDate::from_ymd_opt(2026, 4, 7).unwrap();
         let end = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
-        assert!(get_cooked_in_range(&pool, start, end).await.is_err());
+        assert!(get_cooked_in_range(&pool, 1, start, end).await.is_err());
     }
 
     #[tokio::test]
@@ -410,7 +419,7 @@ mod tests {
         let pool = setup().await;
         let start = NaiveDate::from_ymd_opt(2099, 1, 1).unwrap();
         let end = NaiveDate::from_ymd_opt(2099, 1, 7).unwrap();
-        let list = get_shopping_list(&pool, start, end).await.unwrap();
+        let list = get_shopping_list(&pool, 1, start, end).await.unwrap();
         assert!(list.is_empty());
     }
 
@@ -418,8 +427,8 @@ mod tests {
     async fn test_get_shopping_list_returns_ingredients() {
         let pool = setup().await;
         let date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
-        plan_meal(&pool, date, MealSlot::Lunch, 1, 1).await.unwrap();
-        let list = get_shopping_list(&pool, date, date).await.unwrap();
+        plan_meal(&pool, 1, date, MealSlot::Lunch, 1, 1).await.unwrap();
+        let list = get_shopping_list(&pool, 1, date, date).await.unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].name, "flour");
         // 200 g ≥ 100 g threshold → 0.2 kg; imperial: ceil(200 × 0.035274) = ceil(7.055) = 8 oz
@@ -438,12 +447,12 @@ mod tests {
         for i in 0..MAX_MEAL_PLAN_ENTRIES {
             let date = base + chrono::Duration::days((i / slots.len()) as i64);
             let slot = slots[i % slots.len()].clone();
-            plan_meal(&pool, date, slot, 1, 1).await
+            plan_meal(&pool, 1, date, slot, 1, 1).await
                 .expect("should succeed within quota");
             last_date = date;
         }
         let overflow_date = last_date + chrono::Duration::days(1);
-        let result = plan_meal(&pool, overflow_date, MealSlot::Breakfast, 1, 1).await;
+        let result = plan_meal(&pool, 1, overflow_date, MealSlot::Breakfast, 1, 1).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("limit"));
     }
@@ -453,10 +462,10 @@ mod tests {
         let pool = setup().await;
         let date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
         for _ in 0..MAX_ENTRIES_PER_SLOT {
-            plan_meal(&pool, date, MealSlot::Dinner, 1, 1).await
+            plan_meal(&pool, 1, date, MealSlot::Dinner, 1, 1).await
                 .expect("should succeed within slot quota");
         }
-        let result = plan_meal(&pool, date, MealSlot::Dinner, 1, 1).await;
+        let result = plan_meal(&pool, 1, date, MealSlot::Dinner, 1, 1).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("limit"));
     }
@@ -472,10 +481,10 @@ mod tests {
         .execute(&pool).await.unwrap();
 
         let date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
-        plan_meal(&pool, date, MealSlot::Lunch, 1, 1).await.unwrap();   // 200g Flour
-        plan_meal(&pool, date, MealSlot::Dinner, 2, 1).await.unwrap();  // 100g Flour
+        plan_meal(&pool, 1, date, MealSlot::Lunch, 1, 1).await.unwrap();   // 200g Flour
+        plan_meal(&pool, 1, date, MealSlot::Dinner, 2, 1).await.unwrap();  // 100g Flour
 
-        let list = get_shopping_list(&pool, date, date).await.unwrap();
+        let list = get_shopping_list(&pool, 1, date, date).await.unwrap();
         assert_eq!(list.len(), 1, "Same ingredient+unit should be merged into one entry");
         // 300 g → 0.3 kg; imperial: ceil(300 × 0.035274) = ceil(10.582) = 11 oz
         assert!((list[0].metric_quantity - 0.3).abs() < 0.001);
@@ -488,8 +497,8 @@ mod tests {
         let pool = setup().await;
         let date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
         // Recipe has 200g Flour; 2 portions should give 400g in shopping list.
-        plan_meal(&pool, date, MealSlot::Lunch, 1, 2).await.unwrap();
-        let list = get_shopping_list(&pool, date, date).await.unwrap();
+        plan_meal(&pool, 1, date, MealSlot::Lunch, 1, 2).await.unwrap();
+        let list = get_shopping_list(&pool, 1, date, date).await.unwrap();
         assert_eq!(list.len(), 1);
         // 2 × 200 g = 400 g → 0.4 kg; imperial: ceil(400 × 0.035274) = ceil(14.11) = 15 oz
         assert!((list[0].metric_quantity - 0.4).abs() < 0.001, "2 portions should double the quantity");
@@ -501,8 +510,8 @@ mod tests {
     async fn test_plan_meal_portions_invalid() {
         let pool = setup().await;
         let date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
-        assert!(plan_meal(&pool, date, MealSlot::Lunch, 1, 0).await.is_err(), "0 portions should fail");
-        assert!(plan_meal(&pool, date, MealSlot::Lunch, 1, 11).await.is_err(), "11 portions should fail");
+        assert!(plan_meal(&pool, 1, date, MealSlot::Lunch, 1, 0).await.is_err(), "0 portions should fail");
+        assert!(plan_meal(&pool, 1, date, MealSlot::Lunch, 1, 11).await.is_err(), "11 portions should fail");
     }
 
     #[tokio::test]
@@ -516,10 +525,10 @@ mod tests {
         .execute(&pool).await.unwrap();
 
         let date = NaiveDate::from_ymd_opt(2026, 4, 2).unwrap();
-        plan_meal(&pool, date, MealSlot::Breakfast, 1, 1).await.unwrap();
-        plan_meal(&pool, date, MealSlot::Dinner, 2, 1).await.unwrap();
+        plan_meal(&pool, 1, date, MealSlot::Breakfast, 1, 1).await.unwrap();
+        plan_meal(&pool, 1, date, MealSlot::Dinner, 2, 1).await.unwrap();
 
-        let list = get_shopping_list(&pool, date, date).await.unwrap();
+        let list = get_shopping_list(&pool, 1, date, date).await.unwrap();
         assert_eq!(list.len(), 1, "\"Flour\" and \"flour\" should merge");
         assert_eq!(list[0].name, "flour", "Output name should be lowercased");
         // 300 g ≥ 100 g → 0.3 kg; imperial: ceil(300 × 0.035274) = ceil(10.582) = 11 oz
@@ -544,10 +553,10 @@ mod tests {
         .execute(&pool).await.unwrap();
 
         let date = NaiveDate::from_ymd_opt(2026, 4, 3).unwrap();
-        plan_meal(&pool, date, MealSlot::Lunch, 2, 1).await.unwrap();   // 1 lb Butter
-        plan_meal(&pool, date, MealSlot::Dinner, 3, 1).await.unwrap();  // 8 oz Butter
+        plan_meal(&pool, 1, date, MealSlot::Lunch, 2, 1).await.unwrap();   // 1 lb Butter
+        plan_meal(&pool, 1, date, MealSlot::Dinner, 3, 1).await.unwrap();  // 8 oz Butter
 
-        let list = get_shopping_list(&pool, date, date).await.unwrap();
+        let list = get_shopping_list(&pool, 1, date, date).await.unwrap();
         let butter: Vec<_> = list.iter().filter(|i| i.name == "butter").collect();
         assert_eq!(butter.len(), 1, "lb and oz should merge into one entry");
         // 453.592 + 226.796 = 680.388 g ≥ 100 g → ceil_to(680.388, 100)/1000 = 0.7 kg
@@ -573,10 +582,10 @@ mod tests {
         .execute(&pool).await.unwrap();
 
         let date = NaiveDate::from_ymd_opt(2026, 4, 4).unwrap();
-        plan_meal(&pool, date, MealSlot::Lunch, 2, 1).await.unwrap();
-        plan_meal(&pool, date, MealSlot::Dinner, 3, 1).await.unwrap();
+        plan_meal(&pool, 1, date, MealSlot::Lunch, 2, 1).await.unwrap();
+        plan_meal(&pool, 1, date, MealSlot::Dinner, 3, 1).await.unwrap();
 
-        let list = get_shopping_list(&pool, date, date).await.unwrap();
+        let list = get_shopping_list(&pool, 1, date, date).await.unwrap();
         let sugar: Vec<_> = list.iter().filter(|i| i.name == "sugar").collect();
         assert_eq!(sugar.len(), 1, "kg and g should merge");
         // 500 g + 200 g = 700 g ≥ 100 g → 0.7 kg; imperial: ceil(700 × 0.035274) = ceil(24.692) = 25 oz
@@ -601,10 +610,10 @@ mod tests {
         .execute(&pool).await.unwrap();
 
         let date = NaiveDate::from_ymd_opt(2026, 4, 5).unwrap();
-        plan_meal(&pool, date, MealSlot::Lunch, 2, 1).await.unwrap();
-        plan_meal(&pool, date, MealSlot::Dinner, 3, 1).await.unwrap();
+        plan_meal(&pool, 1, date, MealSlot::Lunch, 2, 1).await.unwrap();
+        plan_meal(&pool, 1, date, MealSlot::Dinner, 3, 1).await.unwrap();
 
-        let list = get_shopping_list(&pool, date, date).await.unwrap();
+        let list = get_shopping_list(&pool, 1, date, date).await.unwrap();
         let salt: Vec<_> = list.iter().filter(|i| i.name == "salt").collect();
         assert_eq!(salt.len(), 1, "oz and g should merge");
         // 2 oz + 10 g = 66.699 g < 100 g → ceil_to(66.699, 10) = 70 g; imperial: ceil(66.699 × 0.035274) = ceil(2.353) = 3 oz
@@ -629,10 +638,10 @@ mod tests {
         .execute(&pool).await.unwrap();
 
         let date = NaiveDate::from_ymd_opt(2026, 4, 6).unwrap();
-        plan_meal(&pool, date, MealSlot::Lunch, 2, 1).await.unwrap();   // 0.5 l
-        plan_meal(&pool, date, MealSlot::Dinner, 3, 1).await.unwrap();  // 2 tbsp + 3 tsp
+        plan_meal(&pool, 1, date, MealSlot::Lunch, 2, 1).await.unwrap();   // 0.5 l
+        plan_meal(&pool, 1, date, MealSlot::Dinner, 3, 1).await.unwrap();  // 2 tbsp + 3 tsp
 
-        let list = get_shopping_list(&pool, date, date).await.unwrap();
+        let list = get_shopping_list(&pool, 1, date, date).await.unwrap();
         let water: Vec<_> = list.iter().filter(|i| i.name == "water").collect();
         assert_eq!(water.len(), 1, "l, tbsp, and tsp should all merge");
         // 500 + 29.574 + 14.787 ≈ 544.36 ml ≥ 100 ml → ceil_to(544.36, 100)/1000 = 0.6 l
@@ -654,10 +663,10 @@ mod tests {
         .execute(&pool).await.unwrap();
 
         let date = NaiveDate::from_ymd_opt(2026, 4, 7).unwrap();
-        plan_meal(&pool, date, MealSlot::Lunch, 1, 1).await.unwrap();   // 200g Flour
-        plan_meal(&pool, date, MealSlot::Dinner, 2, 1).await.unwrap();  // 100ml Flour
+        plan_meal(&pool, 1, date, MealSlot::Lunch, 1, 1).await.unwrap();   // 200g Flour
+        plan_meal(&pool, 1, date, MealSlot::Dinner, 2, 1).await.unwrap();  // 100ml Flour
 
-        let list = get_shopping_list(&pool, date, date).await.unwrap();
+        let list = get_shopping_list(&pool, 1, date, date).await.unwrap();
         let flour: Vec<_> = list.iter().filter(|i| i.name == "flour").collect();
         assert_eq!(flour.len(), 2, "Weight and volume must not be merged");
         // 200 g → metric "kg"; 100 ml → metric "l" (exactly at threshold, ≥ 100 → kg/l)
@@ -675,8 +684,8 @@ mod tests {
         .execute(&pool).await.unwrap();
 
         let date = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
-        plan_meal(&pool, date, MealSlot::Lunch, 2, 1).await.unwrap();
-        let list = get_shopping_list(&pool, date, date).await.unwrap();
+        plan_meal(&pool, 1, date, MealSlot::Lunch, 2, 1).await.unwrap();
+        let list = get_shopping_list(&pool, 1, date, date).await.unwrap();
         let item = list.iter().find(|i| i.name == "lead").unwrap();
         // 1000 g → imperial: ceil(1000 × 0.035274) = ceil(35.274) = 36 oz
         assert_eq!(item.imperial_quantity, Some(36.0));
@@ -693,8 +702,8 @@ mod tests {
         .execute(&pool).await.unwrap();
 
         let date = NaiveDate::from_ymd_opt(2026, 5, 2).unwrap();
-        plan_meal(&pool, date, MealSlot::Lunch, 2, 1).await.unwrap();
-        let list = get_shopping_list(&pool, date, date).await.unwrap();
+        plan_meal(&pool, 1, date, MealSlot::Lunch, 2, 1).await.unwrap();
+        let list = get_shopping_list(&pool, 1, date, date).await.unwrap();
         let item = list.iter().find(|i| i.name == "juice").unwrap();
         // 1000 ml → imperial: ceil(1000 × 0.033814) = ceil(33.814) = 34 fl oz
         assert_eq!(item.imperial_quantity, Some(34.0));
@@ -711,8 +720,8 @@ mod tests {
         .execute(&pool).await.unwrap();
 
         let date = NaiveDate::from_ymd_opt(2026, 5, 3).unwrap();
-        plan_meal(&pool, date, MealSlot::Lunch, 2, 1).await.unwrap();
-        let list = get_shopping_list(&pool, date, date).await.unwrap();
+        plan_meal(&pool, 1, date, MealSlot::Lunch, 2, 1).await.unwrap();
+        let list = get_shopping_list(&pool, 1, date, date).await.unwrap();
         let item = list.iter().find(|i| i.name == "garlic").unwrap();
         assert_eq!(item.imperial_quantity, None);
         assert_eq!(item.imperial_unit, None);
@@ -735,9 +744,9 @@ mod tests {
         .execute(&pool).await.unwrap();
 
         let date = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap();
-        plan_meal(&pool, date, MealSlot::Lunch, 2, 1).await.unwrap();
-        plan_meal(&pool, date, MealSlot::Dinner, 3, 1).await.unwrap();
-        let list = get_shopping_list(&pool, date, date).await.unwrap();
+        plan_meal(&pool, 1, date, MealSlot::Lunch, 2, 1).await.unwrap();
+        plan_meal(&pool, 1, date, MealSlot::Dinner, 3, 1).await.unwrap();
+        let list = get_shopping_list(&pool, 1, date, date).await.unwrap();
 
         let small = list.iter().find(|i| i.name == "smallweight").unwrap();
         assert_eq!(small.metric_unit, "g");
@@ -764,9 +773,9 @@ mod tests {
         .execute(&pool).await.unwrap();
 
         let date = NaiveDate::from_ymd_opt(2026, 5, 5).unwrap();
-        plan_meal(&pool, date, MealSlot::Lunch, 2, 1).await.unwrap();
-        plan_meal(&pool, date, MealSlot::Dinner, 3, 1).await.unwrap();
-        let list = get_shopping_list(&pool, date, date).await.unwrap();
+        plan_meal(&pool, 1, date, MealSlot::Lunch, 2, 1).await.unwrap();
+        plan_meal(&pool, 1, date, MealSlot::Dinner, 3, 1).await.unwrap();
+        let list = get_shopping_list(&pool, 1, date, date).await.unwrap();
 
         let small = list.iter().find(|i| i.name == "smallvol").unwrap();
         assert_eq!(small.metric_unit, "ml");
@@ -798,10 +807,10 @@ mod tests {
         .execute(&pool).await.unwrap();
 
         let date = NaiveDate::from_ymd_opt(2026, 5, 6).unwrap();
-        plan_meal(&pool, date, MealSlot::Breakfast, 2, 1).await.unwrap();
-        plan_meal(&pool, date, MealSlot::Lunch, 3, 1).await.unwrap();
-        plan_meal(&pool, date, MealSlot::Dinner, 4, 1).await.unwrap();
-        let list = get_shopping_list(&pool, date, date).await.unwrap();
+        plan_meal(&pool, 1, date, MealSlot::Breakfast, 2, 1).await.unwrap();
+        plan_meal(&pool, 1, date, MealSlot::Lunch, 3, 1).await.unwrap();
+        plan_meal(&pool, 1, date, MealSlot::Dinner, 4, 1).await.unwrap();
+        let list = get_shopping_list(&pool, 1, date, date).await.unwrap();
 
         let x61 = list.iter().find(|i| i.name == "x61").unwrap();
         assert!((x61.metric_quantity - 70.0).abs() < 0.001, "61 g should ceil to 70 g");
