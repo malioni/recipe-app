@@ -139,8 +139,11 @@ pub async fn get_cooked_in_range(
 
 /// Aggregates ingredients across all planned meals within `[start, end]`.
 ///
-/// Ingredients with the same name and unit are merged by summing their
-/// quantities, so the caller receives a deduplicated shopping list.
+/// Ingredients with the same name (case-insensitive) and physical dimension
+/// are merged by converting all quantities to a canonical unit and summing.
+/// Weight units (g, kg, oz, lb) all normalise to `g`; volume units (ml, l,
+/// tsp, tbsp, cup) all normalise to `ml`. Units from different physical
+/// dimensions (e.g. weight vs. volume) are kept as separate entries.
 ///
 /// # Errors
 ///
@@ -165,18 +168,45 @@ pub async fn get_shopping_list(
 
         let scale = entry.portions as f32;
         for ingredient in recipe.ingredients {
-            let scaled_qty = ingredient.quantity * scale;
+            let (canonical_unit, scaled_qty) = normalise_unit(&ingredient.unit, ingredient.quantity * scale);
             match aggregated
                 .iter_mut()
-                .find(|i| i.name == ingredient.name && i.unit == ingredient.unit)
+                .find(|i| i.name.to_lowercase() == ingredient.name.to_lowercase() && i.unit == canonical_unit)
             {
                 Some(existing) => existing.quantity += scaled_qty,
-                None => aggregated.push(Ingredient { quantity: scaled_qty, ..ingredient }),
+                None => aggregated.push(Ingredient {
+                    name: ingredient.name.to_lowercase(),
+                    quantity: scaled_qty,
+                    unit: canonical_unit,
+                }),
             }
         }
     }
 
     Ok(aggregated)
+}
+
+/// Maps a unit string to its canonical form and scales the quantity accordingly.
+///
+/// All weight units normalise to `"g"`; all volume units normalise to `"ml"`.
+/// Unrecognised units are returned unchanged so ingredients with exotic or
+/// count-based units (e.g. "clove", "piece") still aggregate by exact match.
+fn normalise_unit(unit: &str, quantity: f32) -> (String, f32) {
+    match unit.to_lowercase().as_str() {
+        // Weight → g
+        "g"                              => ("g".to_string(),  quantity),
+        "kg"                             => ("g".to_string(),  quantity * 1_000.0),
+        "oz" | "ounce" | "ounces"        => ("g".to_string(),  quantity * 28.3495),
+        "lb" | "lbs" | "pound" | "pounds" => ("g".to_string(), quantity * 453.592),
+        // Volume → ml
+        "ml"                                         => ("ml".to_string(), quantity),
+        "l" | "liter" | "litre"                      => ("ml".to_string(), quantity * 1_000.0),
+        "tsp" | "teaspoon" | "teaspoons"             => ("ml".to_string(), quantity * 4.92892),
+        "tbsp" | "tablespoon" | "tablespoons"        => ("ml".to_string(), quantity * 14.7868),
+        "cup" | "cups"                               => ("ml".to_string(), quantity * 236.588),
+        // Unknown — pass through unchanged
+        _ => (unit.to_string(), quantity),
+    }
 }
 
 // ---------------------------------------------------------------------------
