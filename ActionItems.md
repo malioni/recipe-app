@@ -42,7 +42,7 @@ The following threat model should be kept in mind when making architectural deci
 
 ## Phase 3 — Nice to Have (UX & Polish)
 
-### 15. [ ] Add Loading States to the Calendar UI
+### 15. [x] Add Loading States to the Calendar UI
 
 **Actions:**
 
