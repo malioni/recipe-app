@@ -245,7 +245,7 @@ pub async fn handle_plan_meal(
     State(pool): State<SqlitePool>,
     Json(entry): Json<MealEntry>,
 ) -> impl IntoResponse {
-    match calendar_manager::plan_meal(&pool, entry.date, entry.slot, entry.recipe_id).await {
+    match calendar_manager::plan_meal(&pool, entry.date, entry.slot, entry.recipe_id, entry.portions).await {
         Ok(_) => {
             tracing::info!("Meal planned: recipe {} on {}", entry.recipe_id, entry.date);
             (StatusCode::CREATED, Json(serde_json::json!({ "status": "planned" })))

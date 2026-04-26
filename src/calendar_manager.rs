@@ -22,6 +22,9 @@ const MAX_ENTRIES_PER_SLOT: usize = 3;
 #[cfg(test)]
 const MAX_ENTRIES_PER_SLOT: usize = 2;
 
+/// Maximum number of portions allowed per meal plan entry.
+const MAX_PORTIONS: i64 = 10;
+
 // ---------------------------------------------------------------------------
 // Meal plan
 // ---------------------------------------------------------------------------
@@ -52,7 +55,12 @@ pub async fn plan_meal(
     date: NaiveDate,
     slot: MealSlot,
     recipe_id: i64,
+    portions: i64,
 ) -> Result<(), String> {
+    if !(1..=MAX_PORTIONS).contains(&portions) {
+        return Err(format!("portions must be between 1 and {MAX_PORTIONS}"));
+    }
+
     // Verify the recipe exists before linking it.
     storage::load_recipe(pool, recipe_id).await
         .map_err(|_| format!("Recipe with ID {} not found", recipe_id))?;
@@ -73,7 +81,7 @@ pub async fn plan_meal(
         return Err(format!("Slot limit of {} entries reached", MAX_ENTRIES_PER_SLOT));
     }
 
-    let entry = MealEntry { id: None, date, slot, recipe_id };
+    let entry = MealEntry { id: None, date, slot, recipe_id, portions };
     calendar_storage::add_meal_entry(pool, SINGLE_USER_ID, &entry).await
 }
 
@@ -155,13 +163,15 @@ pub async fn get_shopping_list(
         let recipe = storage::load_recipe(pool, entry.recipe_id).await
             .map_err(|_| format!("Recipe with ID {} not found", entry.recipe_id))?;
 
+        let scale = entry.portions as f32;
         for ingredient in recipe.ingredients {
+            let scaled_qty = ingredient.quantity * scale;
             match aggregated
                 .iter_mut()
                 .find(|i| i.name == ingredient.name && i.unit == ingredient.unit)
             {
-                Some(existing) => existing.quantity += ingredient.quantity,
-                None => aggregated.push(ingredient),
+                Some(existing) => existing.quantity += scaled_qty,
+                None => aggregated.push(Ingredient { quantity: scaled_qty, ..ingredient }),
             }
         }
     }

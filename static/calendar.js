@@ -164,7 +164,7 @@ function renderGrid() {
         const name = recipe ? recipe.name : `Recipe #${entry.recipe_id}`;
         const cooked = !!cookedData[`${dateStr}-${entry.recipe_id}`];
         cell.appendChild(
-          makeMealChip(name, entry.id, dateStr, entry.recipe_id, cooked)
+          makeMealChip(name, entry.id, dateStr, entry.recipe_id, cooked, entry.portions ?? 1)
         );
       });
 
@@ -189,15 +189,22 @@ function appendCell(grid, className, text) {
   return cell;
 }
 
-function makeMealChip(name, entryId, date, recipeId, cooked) {
+function makeMealChip(name, entryId, date, recipeId, cooked, portions = 1) {
   const chip = document.createElement("div");
   chip.className = `meal-chip${cooked ? " cooked" : ""}`;
 
   // Name span — textContent prevents XSS from recipe names
   const nameSpan = document.createElement("span");
   nameSpan.className = "chip-name";
-  nameSpan.title = name;
+  nameSpan.title = portions > 1 ? `${name} ×${portions}` : name;
   nameSpan.textContent = name;
+
+  if (portions > 1) {
+    const badge = document.createElement("span");
+    badge.className = "chip-portions";
+    badge.textContent = `×${portions}`;
+    nameSpan.appendChild(badge);
+  }
 
   const actions = document.createElement("span");
   actions.className = "chip-actions";
@@ -234,6 +241,8 @@ async function openPickModal(date, slot) {
   pendingDate = date;
   pendingSlot = slot;
 
+  document.getElementById("modal-portions").value = 1;
+
   const list = document.getElementById("modal-recipe-list");
   list.innerHTML = `<div class="p-3 text-muted">Loading recipes…</div>`;
   pickModal.show();
@@ -261,7 +270,10 @@ async function openPickModal(date, slot) {
       btn.type = "button";
       btn.className = "list-group-item list-group-item-action";
       btn.textContent = r.name;
-      btn.onclick = () => planMeal(date, slot, r.id);
+      btn.onclick = () => {
+        const portions = parseInt(document.getElementById("modal-portions").value, 10) || 1;
+        planMeal(date, slot, r.id, portions);
+      };
       list.appendChild(btn);
     });
   }
@@ -270,13 +282,13 @@ async function openPickModal(date, slot) {
 // ----------------------------------------------------------------
 // API actions
 // ----------------------------------------------------------------
-async function planMeal(date, slot, recipeId) {
+async function planMeal(date, slot, recipeId, portions = 1) {
   pickModal.hide();
   try {
     const res = await fetch("/calendar/entries", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ date, slot, recipe_id: recipeId }),
+      body: JSON.stringify({ date, slot, recipe_id: recipeId, portions }),
     });
     if (!res.ok) throw new Error(await res.text());
     await loadWeek();

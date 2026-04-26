@@ -26,7 +26,7 @@ pub async fn load_meal_entries_in_range(
     let end_str = end.to_string();
 
     let rows = sqlx::query!(
-        "SELECT id, date, slot, recipe_id FROM meal_plan
+        "SELECT id, date, slot, recipe_id, portions FROM meal_plan
          WHERE user_id = ? AND date >= ? AND date <= ?
          ORDER BY date, slot",
         user_id, start_str, end_str
@@ -40,7 +40,7 @@ pub async fn load_meal_entries_in_range(
             let date = row.date.parse::<NaiveDate>()
                 .map_err(|e| format!("Failed to parse date '{}': {e}", row.date))?;
             let slot = parse_slot(&row.slot)?;
-            Ok(MealEntry { id: Some(row.id), date, slot, recipe_id: row.recipe_id })
+            Ok(MealEntry { id: Some(row.id), date, slot, recipe_id: row.recipe_id, portions: row.portions })
         })
         .collect()
 }
@@ -58,8 +58,8 @@ pub async fn add_meal_entry(pool: &SqlitePool, user_id: i64, entry: &MealEntry) 
     let slot_str = entry.slot.to_string();
 
     sqlx::query!(
-        "INSERT INTO meal_plan (user_id, date, slot, recipe_id) VALUES (?, ?, ?, ?)",
-        user_id, date_str, slot_str, entry.recipe_id
+        "INSERT INTO meal_plan (user_id, date, slot, recipe_id, portions) VALUES (?, ?, ?, ?, ?)",
+        user_id, date_str, slot_str, entry.recipe_id, entry.portions
     )
     .execute(pool)
     .await

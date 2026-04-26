@@ -75,6 +75,12 @@
   text-overflow: ellipsis;
   flex: 1;
 }
+.chip-portions {
+  margin-left: 3px;
+  font-size: 0.7rem;
+  color: #6c757d;
+  font-weight: 600;
+}
 .meal-chip .chip-actions {
   display: flex;
   gap: 2px;
