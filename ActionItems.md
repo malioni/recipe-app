@@ -82,7 +82,7 @@ The following threat model should be kept in mind when making architectural deci
 
 ---
 
-### 26. [ ] Full Multi-User Support
+### 26. [x] Full Multi-User Support
 
 **Context:** The app currently uses a hardcoded `SINGLE_USER_ID` as an interim placeholder. Full multi-user support means users can register (or be invited), and all data is scoped to their `user_id`.
 
