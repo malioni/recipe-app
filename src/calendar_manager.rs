@@ -3,6 +3,7 @@
 /// This module sits between the network layer and `calendar_storage`. It owns
 /// all business logic — validation, date arithmetic, ingredient aggregation —
 /// so neither the network handlers nor the storage layer need to care about it.
+use std::borrow::Cow;
 use sqlx::SqlitePool;
 use chrono::NaiveDate;
 use crate::model::{CookedEntry, Ingredient, MealEntry, MealSlot};
@@ -145,6 +146,10 @@ pub async fn get_cooked_in_range(
 /// tsp, tbsp, cup) all normalise to `ml`. Units from different physical
 /// dimensions (e.g. weight vs. volume) are kept as separate entries.
 ///
+/// When two ingredients share a name but differ only in casing (e.g. "Flour"
+/// vs "flour"), the casing of the entry that appears first in the underlying
+/// `ORDER BY date, slot` query is preserved in the output.
+///
 /// # Errors
 ///
 /// Returns `Err` if the date range is invalid, the query fails, or a
@@ -177,7 +182,7 @@ pub async fn get_shopping_list(
                 None => aggregated.push(Ingredient {
                     name: ingredient.name.to_lowercase(),
                     quantity: scaled_qty,
-                    unit: canonical_unit,
+                    unit: canonical_unit.into_owned(),
                 }),
             }
         }
@@ -191,21 +196,24 @@ pub async fn get_shopping_list(
 /// All weight units normalise to `"g"`; all volume units normalise to `"ml"`.
 /// Unrecognised units are returned unchanged so ingredients with exotic or
 /// count-based units (e.g. "clove", "piece") still aggregate by exact match.
-fn normalise_unit(unit: &str, quantity: f32) -> (String, f32) {
+///
+/// Returns a `Cow` so known units borrow a `'static` literal (no allocation);
+/// only the passthrough branch borrows the caller's input slice.
+fn normalise_unit<'a>(unit: &'a str, quantity: f32) -> (Cow<'a, str>, f32) {
     match unit.to_lowercase().as_str() {
         // Weight → g
-        "g"                              => ("g".to_string(),  quantity),
-        "kg"                             => ("g".to_string(),  quantity * 1_000.0),
-        "oz" | "ounce" | "ounces"        => ("g".to_string(),  quantity * 28.3495),
-        "lb" | "lbs" | "pound" | "pounds" => ("g".to_string(), quantity * 453.592),
+        "g"                               => (Cow::Borrowed("g"),  quantity),
+        "kg"                              => (Cow::Borrowed("g"),  quantity * 1_000.0),
+        "oz" | "ounce" | "ounces"         => (Cow::Borrowed("g"),  quantity * 28.3495),
+        "lb" | "lbs" | "pound" | "pounds" => (Cow::Borrowed("g"),  quantity * 453.592),
         // Volume → ml
-        "ml"                                         => ("ml".to_string(), quantity),
-        "l" | "liter" | "litre"                      => ("ml".to_string(), quantity * 1_000.0),
-        "tsp" | "teaspoon" | "teaspoons"             => ("ml".to_string(), quantity * 4.92892),
-        "tbsp" | "tablespoon" | "tablespoons"        => ("ml".to_string(), quantity * 14.7868),
-        "cup" | "cups"                               => ("ml".to_string(), quantity * 236.588),
+        "ml"                                  => (Cow::Borrowed("ml"), quantity),
+        "l" | "liter" | "litre"               => (Cow::Borrowed("ml"), quantity * 1_000.0),
+        "tsp" | "teaspoon" | "teaspoons"      => (Cow::Borrowed("ml"), quantity * 4.92892),
+        "tbsp" | "tablespoon" | "tablespoons" => (Cow::Borrowed("ml"), quantity * 14.7868),
+        "cup" | "cups"                        => (Cow::Borrowed("ml"), quantity * 236.588),
         // Unknown — pass through unchanged
-        _ => (unit.to_string(), quantity),
+        _ => (Cow::Borrowed(unit), quantity),
     }
 }
 
