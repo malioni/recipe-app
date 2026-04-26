@@ -40,7 +40,7 @@ pub async fn load_meal_entries_in_range(
             let date = row.date.parse::<NaiveDate>()
                 .map_err(|e| format!("Failed to parse date '{}': {e}", row.date))?;
             let slot = parse_slot(&row.slot)?;
-            Ok(MealEntry { id: row.id, date, slot, recipe_id: row.recipe_id })
+            Ok(MealEntry { id: Some(row.id), date, slot, recipe_id: row.recipe_id })
         })
         .collect()
 }
