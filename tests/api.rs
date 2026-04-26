@@ -607,3 +607,174 @@ async fn test_migration_idempotent() {
     assert_eq!(count_before, count_after, "second migration pass must not alter meal_plan data");
     assert_eq!(count_after, 1);
 }
+
+// ---------------------------------------------------------------------------
+// Multi-user isolation and admin route tests
+// ---------------------------------------------------------------------------
+
+/// User B logs in after admin creates a recipe; B's recipe list must be empty.
+#[tokio::test]
+async fn test_user_a_cannot_see_user_b_recipes() {
+    let (app, pool) = build_test_app().await;
+    let admin_cookie = login(&app).await;
+
+    // Admin creates a recipe.
+    app.clone()
+        .oneshot(json_req("POST", "/recipes", &admin_cookie, serde_json::json!({
+            "name": "Admin Secret Recipe", "source_url": null,
+            "ingredients": [], "instructions": []
+        })))
+        .await.unwrap();
+
+    // Insert a second non-admin user directly and log in as them.
+    let hash = auth::hash_password("password2").unwrap();
+    storage::create_user(&pool, "user2", &hash).await.unwrap();
+
+    let login_req = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from("username=user2&password=password2"))
+        .unwrap();
+    let login_res = app.clone().oneshot(login_req).await.unwrap();
+    assert_eq!(login_res.status(), StatusCode::SEE_OTHER);
+    let user2_cookie = login_res
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str().unwrap()
+        .split(';').next().unwrap()
+        .to_string();
+
+    // User 2's recipe list must be empty.
+    let response = app.clone()
+        .oneshot(get_req("/recipes", &user2_cookie))
+        .await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let recipes: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert!(recipes.is_empty(), "User 2 must not see User 1's recipes");
+}
+
+/// Admin can create a new user via POST /admin/users; the new user can then log in.
+#[tokio::test]
+async fn test_admin_create_user_api() {
+    let (app, _pool) = build_test_app().await;
+    let cookie = login(&app).await;
+
+    let response = app.clone()
+        .oneshot(json_req("POST", "/admin/users", &cookie, serde_json::json!({
+            "username": "newuser",
+            "password": "strongpassword"
+        })))
+        .await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED, "Admin should be able to create a user");
+
+    // New user can log in.
+    let login_req = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from("username=newuser&password=strongpassword"))
+        .unwrap();
+    let login_res = app.clone().oneshot(login_req).await.unwrap();
+    assert_eq!(login_res.status(), StatusCode::SEE_OTHER);
+    assert_ne!(
+        login_res.headers().get("location").unwrap().to_str().unwrap(),
+        "/login?error=1",
+        "New user should be able to log in"
+    );
+}
+
+/// A non-admin user receives 403 when accessing any admin route.
+#[tokio::test]
+async fn test_non_admin_cannot_access_admin_routes() {
+    let (app, pool) = build_test_app().await;
+
+    // Create a non-admin user.
+    let hash = auth::hash_password("password3").unwrap();
+    storage::create_user(&pool, "regularuser", &hash).await.unwrap();
+
+    let login_req = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from("username=regularuser&password=password3"))
+        .unwrap();
+    let login_res = app.clone().oneshot(login_req).await.unwrap();
+    let user_cookie = login_res
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str().unwrap()
+        .split(';').next().unwrap()
+        .to_string();
+
+    // GET /admin should return 403.
+    let response = app.clone()
+        .oneshot(get_req("/admin", &user_cookie))
+        .await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN, "Non-admin must be forbidden from /admin");
+
+    // GET /admin/users should also return 403.
+    let response = app.clone()
+        .oneshot(get_req("/admin/users", &user_cookie))
+        .await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN, "Non-admin must be forbidden from /admin/users");
+}
+
+/// Admin changes a user's password; old credentials fail and new ones succeed.
+#[tokio::test]
+async fn test_admin_change_password_api() {
+    let (app, _pool) = build_test_app().await;
+    let admin_cookie = login(&app).await;
+
+    // Admin creates a target user.
+    app.clone()
+        .oneshot(json_req("POST", "/admin/users", &admin_cookie, serde_json::json!({
+            "username": "targetuser",
+            "password": "originalpassword"
+        })))
+        .await.unwrap();
+
+    // Fetch user list to get target user's id.
+    let res = app.clone()
+        .oneshot(get_req("/admin/users", &admin_cookie))
+        .await.unwrap();
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let users: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    let target = users.iter().find(|u| u["username"] == "targetuser").unwrap();
+    let target_id = target["id"].as_i64().unwrap();
+
+    // Admin changes the password.
+    let response = app.clone()
+        .oneshot(json_req("POST", "/admin/users/password", &admin_cookie, serde_json::json!({
+            "target_user_id": target_id,
+            "new_password": "brandnewpassword"
+        })))
+        .await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "Password change should succeed");
+
+    // Old password now fails.
+    let bad_login = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from("username=targetuser&password=originalpassword"))
+        .unwrap();
+    let bad_res = app.clone().oneshot(bad_login).await.unwrap();
+    let bad_location = bad_res.headers().get("location").unwrap().to_str().unwrap();
+    assert!(bad_location.contains("error=1"), "Old password should no longer work");
+
+    // New password succeeds.
+    let good_login = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from("username=targetuser&password=brandnewpassword"))
+        .unwrap();
+    let good_res = app.clone().oneshot(good_login).await.unwrap();
+    assert_eq!(good_res.status(), StatusCode::SEE_OTHER);
+    let good_location = good_res.headers().get("location").unwrap().to_str().unwrap();
+    assert!(!good_location.contains("error=1"), "New password should allow login");
+}
