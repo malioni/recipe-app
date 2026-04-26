@@ -353,7 +353,7 @@ mod tests {
         plan_meal(&pool, date, MealSlot::Lunch, 1, 1).await.unwrap();
         let list = get_shopping_list(&pool, date, date).await.unwrap();
         assert_eq!(list.len(), 1);
-        assert_eq!(list[0].name, "Flour");
+        assert_eq!(list[0].name, "flour");
         assert!((list[0].quantity - 200.0).abs() < f32::EPSILON);
     }
 
@@ -425,5 +425,197 @@ mod tests {
         let date = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
         assert!(plan_meal(&pool, date, MealSlot::Lunch, 1, 0).await.is_err(), "0 portions should fail");
         assert!(plan_meal(&pool, date, MealSlot::Lunch, 1, 11).await.is_err(), "11 portions should fail");
+    }
+
+    #[tokio::test]
+    async fn test_get_shopping_list_case_insensitive_name() {
+        let pool = setup().await;
+        // Recipe 1 has "Flour" 200g (from setup), recipe 2 has "flour" 100g
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (2, 1, 'Cake', '[{\"name\":\"flour\",\"quantity\":100.0,\"unit\":\"g\"}]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+
+        let date = NaiveDate::from_ymd_opt(2026, 4, 2).unwrap();
+        plan_meal(&pool, date, MealSlot::Breakfast, 1, 1).await.unwrap();
+        plan_meal(&pool, date, MealSlot::Dinner, 2, 1).await.unwrap();
+
+        let list = get_shopping_list(&pool, date, date).await.unwrap();
+        assert_eq!(list.len(), 1, "\"Flour\" and \"flour\" should merge");
+        assert_eq!(list[0].name, "flour", "Output name should be lowercased");
+        assert!((list[0].quantity - 300.0).abs() < 0.001);
+    }
+
+    #[tokio::test]
+    async fn test_get_shopping_list_merges_lb_and_oz() {
+        let pool = setup().await;
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (2, 1, 'Bread', '[{\"name\":\"Butter\",\"quantity\":1.0,\"unit\":\"lb\"}]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (3, 1, 'Cake', '[{\"name\":\"Butter\",\"quantity\":8.0,\"unit\":\"oz\"}]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+
+        let date = NaiveDate::from_ymd_opt(2026, 4, 3).unwrap();
+        plan_meal(&pool, date, MealSlot::Lunch, 2, 1).await.unwrap();   // 1 lb Butter
+        plan_meal(&pool, date, MealSlot::Dinner, 3, 1).await.unwrap();  // 8 oz Butter
+
+        let list = get_shopping_list(&pool, date, date).await.unwrap();
+        let butter: Vec<_> = list.iter().filter(|i| i.name == "butter").collect();
+        assert_eq!(butter.len(), 1, "lb and oz should merge into one entry");
+        assert_eq!(butter[0].unit, "g");
+        let expected = 453.592 + 8.0 * 28.3495; // ≈ 680.388
+        assert!((butter[0].quantity - expected).abs() < 0.01);
+    }
+
+    #[tokio::test]
+    async fn test_get_shopping_list_merges_kg_and_g() {
+        let pool = setup().await;
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (2, 1, 'Syrup', '[{\"name\":\"Sugar\",\"quantity\":0.5,\"unit\":\"kg\"}]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (3, 1, 'Cookie', '[{\"name\":\"Sugar\",\"quantity\":200.0,\"unit\":\"g\"}]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+
+        let date = NaiveDate::from_ymd_opt(2026, 4, 4).unwrap();
+        plan_meal(&pool, date, MealSlot::Lunch, 2, 1).await.unwrap();
+        plan_meal(&pool, date, MealSlot::Dinner, 3, 1).await.unwrap();
+
+        let list = get_shopping_list(&pool, date, date).await.unwrap();
+        let sugar: Vec<_> = list.iter().filter(|i| i.name == "sugar").collect();
+        assert_eq!(sugar.len(), 1, "kg and g should merge");
+        assert_eq!(sugar[0].unit, "g");
+        assert!((sugar[0].quantity - 700.0).abs() < 0.001);
+    }
+
+    #[tokio::test]
+    async fn test_get_shopping_list_merges_oz_and_g() {
+        let pool = setup().await;
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (2, 1, 'Soup', '[{\"name\":\"Salt\",\"quantity\":2.0,\"unit\":\"oz\"}]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (3, 1, 'Stew', '[{\"name\":\"Salt\",\"quantity\":10.0,\"unit\":\"g\"}]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+
+        let date = NaiveDate::from_ymd_opt(2026, 4, 5).unwrap();
+        plan_meal(&pool, date, MealSlot::Lunch, 2, 1).await.unwrap();
+        plan_meal(&pool, date, MealSlot::Dinner, 3, 1).await.unwrap();
+
+        let list = get_shopping_list(&pool, date, date).await.unwrap();
+        let salt: Vec<_> = list.iter().filter(|i| i.name == "salt").collect();
+        assert_eq!(salt.len(), 1, "oz and g should merge");
+        assert_eq!(salt[0].unit, "g");
+        let expected = 2.0 * 28.3495 + 10.0; // ≈ 66.699
+        assert!((salt[0].quantity - expected).abs() < 0.01);
+    }
+
+    #[tokio::test]
+    async fn test_get_shopping_list_merges_volume_units() {
+        let pool = setup().await;
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (2, 1, 'Tea', '[{\"name\":\"Water\",\"quantity\":0.5,\"unit\":\"l\"}]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (3, 1, 'Sauce', '[{\"name\":\"Water\",\"quantity\":2.0,\"unit\":\"tbsp\"},{\"name\":\"Water\",\"quantity\":3.0,\"unit\":\"tsp\"}]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+
+        let date = NaiveDate::from_ymd_opt(2026, 4, 6).unwrap();
+        plan_meal(&pool, date, MealSlot::Lunch, 2, 1).await.unwrap();   // 0.5 l
+        plan_meal(&pool, date, MealSlot::Dinner, 3, 1).await.unwrap();  // 2 tbsp + 3 tsp
+
+        let list = get_shopping_list(&pool, date, date).await.unwrap();
+        let water: Vec<_> = list.iter().filter(|i| i.name == "water").collect();
+        assert_eq!(water.len(), 1, "l, tbsp, and tsp should all merge");
+        assert_eq!(water[0].unit, "ml");
+        let expected = 500.0 + 2.0 * 14.7868 + 3.0 * 4.92892; // ≈ 544.337
+        assert!((water[0].quantity - expected).abs() < 0.01);
+    }
+
+    #[tokio::test]
+    async fn test_get_shopping_list_weight_and_volume_stay_separate() {
+        let pool = setup().await;
+        // Recipe 1 already has Flour 200g; add a recipe with Flour 100ml
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (2, 1, 'Batter', '[{\"name\":\"Flour\",\"quantity\":100.0,\"unit\":\"ml\"}]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+
+        let date = NaiveDate::from_ymd_opt(2026, 4, 7).unwrap();
+        plan_meal(&pool, date, MealSlot::Lunch, 1, 1).await.unwrap();   // 200g Flour
+        plan_meal(&pool, date, MealSlot::Dinner, 2, 1).await.unwrap();  // 100ml Flour
+
+        let list = get_shopping_list(&pool, date, date).await.unwrap();
+        let flour: Vec<_> = list.iter().filter(|i| i.name == "flour").collect();
+        assert_eq!(flour.len(), 2, "Weight and volume must not be merged");
+        let units: Vec<&str> = flour.iter().map(|i| i.unit.as_str()).collect();
+        assert!(units.contains(&"g") && units.contains(&"ml"));
+    }
+
+    #[test]
+    fn test_normalise_unit() {
+        // Weight → g
+        let (u, q) = normalise_unit("g", 100.0);
+        assert_eq!(u, "g"); assert!((q - 100.0).abs() < 0.001);
+
+        let (u, q) = normalise_unit("kg", 1.0);
+        assert_eq!(u, "g"); assert!((q - 1000.0).abs() < 0.001);
+
+        let (u, q) = normalise_unit("oz", 1.0);
+        assert_eq!(u, "g"); assert!((q - 28.3495).abs() < 0.001);
+
+        let (u, q) = normalise_unit("Oz", 1.0); // case-insensitive
+        assert_eq!(u, "g"); assert!((q - 28.3495).abs() < 0.001);
+
+        let (u, q) = normalise_unit("lb", 1.0);
+        assert_eq!(u, "g"); assert!((q - 453.592).abs() < 0.001);
+
+        let (u, q) = normalise_unit("pounds", 1.0);
+        assert_eq!(u, "g"); assert!((q - 453.592).abs() < 0.001);
+
+        // Volume → ml
+        let (u, q) = normalise_unit("ml", 100.0);
+        assert_eq!(u, "ml"); assert!((q - 100.0).abs() < 0.001);
+
+        let (u, q) = normalise_unit("l", 1.0);
+        assert_eq!(u, "ml"); assert!((q - 1000.0).abs() < 0.001);
+
+        let (u, q) = normalise_unit("tsp", 1.0);
+        assert_eq!(u, "ml"); assert!((q - 4.92892).abs() < 0.001);
+
+        let (u, q) = normalise_unit("tbsp", 1.0);
+        assert_eq!(u, "ml"); assert!((q - 14.7868).abs() < 0.001);
+
+        let (u, q) = normalise_unit("cup", 1.0);
+        assert_eq!(u, "ml"); assert!((q - 236.588).abs() < 0.001);
+
+        let (u, q) = normalise_unit("cups", 2.0);
+        assert_eq!(u, "ml"); assert!((q - 473.176).abs() < 0.001);
+
+        // Unknown → passthrough
+        let (u, q) = normalise_unit("clove", 3.0);
+        assert_eq!(u, "clove"); assert!((q - 3.0).abs() < 0.001);
+
+        let (u, q) = normalise_unit("", 1.0);
+        assert_eq!(u, ""); assert!((q - 1.0).abs() < 0.001);
     }
 }
