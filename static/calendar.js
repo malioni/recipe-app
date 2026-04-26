@@ -93,10 +93,12 @@ async function loadWeek() {
   const start = toISO(weekStart);
   const end = toISO(addDays(weekStart, 6));
 
-  // Fetch meal plan and cooked log in parallel
-  const [planRes, cookedRes] = await Promise.all([
+  // Fetch meal plan, cooked log, and recipe list in parallel so that
+  // recipe names are available before renderGrid runs.
+  const [planRes, cookedRes, recipesRes] = await Promise.all([
     fetch(`/calendar/entries?start=${start}&end=${end}`),
     fetch(`/calendar/cooked?start=${start}&end=${end}`),
+    fetch("/recipes"),
   ]).finally(() => navBtns.forEach((b) => (b.disabled = false)));
 
   calendarData = {};
@@ -116,6 +118,13 @@ async function loadWeek() {
     entries.forEach((e) => {
       cookedData[`${e.date}-${e.recipe_id}`] = true;
     });
+  }
+
+  if (recipesRes.ok) {
+    allRecipes = await recipesRes.json();
+  } else {
+    allRecipes = [];
+    console.warn("Could not load recipes — meal names may not display correctly.");
   }
 
   renderGrid();
