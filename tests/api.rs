@@ -770,7 +770,7 @@ async fn test_admin_delete_user_api() {
 /// Admin receives 400 when attempting to delete their own account.
 #[tokio::test]
 async fn test_admin_cannot_delete_self_api() {
-    let (app, pool) = build_test_app().await;
+    let (app, _pool) = build_test_app().await;
     let admin_cookie = login(&app).await;
 
     // Fetch the admin's own ID via /profile/me.
@@ -926,6 +926,146 @@ async fn test_admin_change_password_api() {
     assert_eq!(good_res.status(), StatusCode::SEE_OTHER);
     let good_location = good_res.headers().get("location").unwrap().to_str().unwrap();
     assert!(!good_location.contains("error=1"), "New password should allow login");
+}
+
+// ---------------------------------------------------------------------------
+// Auth / session tests
+// ---------------------------------------------------------------------------
+
+/// Logging out invalidates the session: a subsequent authenticated request
+/// redirects to `/login` instead of succeeding.
+#[tokio::test]
+async fn test_logout_invalidates_session() {
+    let (app, _pool) = build_test_app().await;
+    let cookie = login(&app).await;
+
+    // POST /logout — no Origin header, so CSRF middleware passes through.
+    let logout_req = Request::builder()
+        .method("POST")
+        .uri("/logout")
+        .header("cookie", &cookie)
+        .body(Body::empty())
+        .unwrap();
+    let logout_res = app.clone().oneshot(logout_req).await.unwrap();
+    assert_eq!(logout_res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(logout_res.headers().get("location").unwrap(), "/login");
+
+    // Same cookie must no longer grant access.
+    let response = app.clone().oneshot(get_req("/recipes", &cookie)).await.unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::SEE_OTHER,
+        "Invalidated session must redirect to /login"
+    );
+    assert_eq!(response.headers().get("location").unwrap(), "/login");
+}
+
+// ---------------------------------------------------------------------------
+// Missing API integration tests (item 33)
+// ---------------------------------------------------------------------------
+
+/// POST a meal entry then DELETE it directly by id; the range query returns empty.
+#[tokio::test]
+async fn test_delete_meal_entry_direct() {
+    let (app, _pool) = build_test_app().await;
+    let cookie = login(&app).await;
+
+    // Create a recipe.
+    app.clone()
+        .oneshot(json_req("POST", "/recipes", &cookie, serde_json::json!({
+            "name": "Direct Delete Recipe", "source_url": null,
+            "ingredients": [], "instructions": []
+        })))
+        .await.unwrap();
+
+    let body = app.clone().oneshot(get_req("/recipes", &cookie)).await.unwrap()
+        .into_body().collect().await.unwrap().to_bytes();
+    let recipes: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    let recipe_id = recipes[0]["id"].as_i64().unwrap();
+
+    // Plan it.
+    let plan_res = app.clone()
+        .oneshot(json_req("POST", "/calendar/entries", &cookie, serde_json::json!({
+            "date": "2026-10-01", "slot": "breakfast", "recipe_id": recipe_id
+        })))
+        .await.unwrap();
+    assert_eq!(plan_res.status(), StatusCode::CREATED);
+
+    // Retrieve the entry id.
+    let body = app.clone()
+        .oneshot(get_req("/calendar/entries?start=2026-10-01&end=2026-10-01", &cookie))
+        .await.unwrap()
+        .into_body().collect().await.unwrap().to_bytes();
+    let entries: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(entries.len(), 1);
+    let entry_id = entries[0]["id"].as_i64().unwrap();
+
+    // Delete by id.
+    let res = app.clone()
+        .oneshot(delete_req(&format!("/calendar/entries?id={}", entry_id), &cookie))
+        .await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Range query must now return empty.
+    let body = app.clone()
+        .oneshot(get_req("/calendar/entries?start=2026-10-01&end=2026-10-01", &cookie))
+        .await.unwrap()
+        .into_body().collect().await.unwrap().to_bytes();
+    let remaining: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert!(remaining.is_empty(), "Entry should be gone after direct DELETE");
+}
+
+/// GET /calendar/entries with start after end returns 400.
+#[tokio::test]
+async fn test_get_calendar_entries_invalid_range() {
+    let (app, _pool) = build_test_app().await;
+    let cookie = login(&app).await;
+
+    let response = app
+        .oneshot(get_req("/calendar/entries?start=2026-05-07&end=2026-05-01", &cookie))
+        .await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+/// POST /recipes with a body exceeding 64 KB returns 413.
+#[tokio::test]
+async fn test_body_size_limit() {
+    let (app, _pool) = build_test_app().await;
+    let cookie = login(&app).await;
+
+    let oversized_body = format!(
+        r#"{{"name":"{}","source_url":null,"ingredients":[],"instructions":[]}}"#,
+        "a".repeat(70_000)
+    );
+    let request = Request::builder()
+        .method("POST")
+        .uri("/recipes")
+        .header("cookie", &cookie)
+        .header("content-type", "application/json")
+        .body(Body::from(oversized_body))
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+/// Authenticated GET / returns 200.
+#[tokio::test]
+async fn test_index_route_smoke() {
+    let (app, _pool) = build_test_app().await;
+    let cookie = login(&app).await;
+
+    let response = app.oneshot(get_req("/", &cookie)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// Authenticated GET to an unknown route returns 404.
+#[tokio::test]
+async fn test_404_fallback() {
+    let (app, _pool) = build_test_app().await;
+    let cookie = login(&app).await;
+
+    let response = app.oneshot(get_req("/does-not-exist", &cookie)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 // ---------------------------------------------------------------------------

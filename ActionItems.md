@@ -126,7 +126,7 @@ The following threat model should be kept in mind when making architectural deci
 
 ---
 
-### 32. [ ] Auth / Session Tests
+### 32. [x] Auth / Session Tests
 
 **Actions:**
 
@@ -134,7 +134,7 @@ The following threat model should be kept in mind when making architectural deci
 
 ---
 
-### 33. [ ] Missing API Integration Tests
+### 33. [x] Missing API Integration Tests
 
 **Context:** Several handlers have no direct integration-test coverage.
 
