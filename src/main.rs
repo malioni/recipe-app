@@ -59,6 +59,7 @@ async fn main() {
     run_migration(&pool, "001", include_str!("../migrations/001_initial.sql")).await;
     run_migration(&pool, "002", include_str!("../migrations/002_multiple_entries_per_slot.sql")).await;
     run_migration(&pool, "003", include_str!("../migrations/003_add_portions_to_meal_plan.sql")).await;
+    run_migration(&pool, "004", include_str!("../migrations/004_add_is_admin_to_users.sql")).await;
 
     // Seed the initial user from environment variables if no users exist yet.
     // Set INITIAL_USERNAME and INITIAL_PASSWORD in your .env file before
@@ -70,10 +71,13 @@ async fn main() {
             .expect("No users exist. Set INITIAL_PASSWORD in your .env file.");
         let hash = auth::hash_password(&password)
             .expect("Failed to hash initial password");
-        storage::create_user(&pool, &username, &hash)
+        let user_id = storage::create_user(&pool, &username, &hash)
             .await
             .expect("Failed to create initial user");
-        tracing::info!("Created initial user: {}", username);
+        storage::promote_user_to_admin(&pool, user_id)
+            .await
+            .expect("Failed to promote initial user to admin");
+        tracing::info!("Created initial admin user: {}", username);
     }
 
     // Configure the session store backed by SQLite so sessions survive restarts.
@@ -121,6 +125,10 @@ async fn main() {
         .route("/calendar/cooked", get(network::handle_get_cooked_entries)
             .post(network::handle_mark_cooked))
         .route("/calendar/shopping-list", get(network::handle_shopping_list))
+        // Admin
+        .route("/admin", get(network::handle_admin_page))
+        .route("/admin/users", get(network::handle_admin_list_users).post(network::handle_admin_create_user))
+        .route("/admin/users/password", post(network::handle_admin_change_password))
         .fallback(network::handle_404)
         .nest_service("/static", ServeDir::new("static"))
         .layer(middleware::from_fn(add_csp_header))

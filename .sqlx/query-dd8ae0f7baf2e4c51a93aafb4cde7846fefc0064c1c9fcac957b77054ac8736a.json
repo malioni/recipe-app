@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, username, password_hash FROM users WHERE username = ?",
+  "query": "SELECT id, username, password_hash, is_admin FROM users WHERE id = ?",
   "describe": {
     "columns": [
       {
@@ -17,16 +17,22 @@
         "name": "password_hash",
         "ordinal": 2,
         "type_info": "Text"
+      },
+      {
+        "name": "is_admin",
+        "ordinal": 3,
+        "type_info": "Integer"
       }
     ],
     "parameters": {
       "Right": 1
     },
     "nullable": [
-      true,
+      false,
+      false,
       false,
       false
     ]
   },
-  "hash": "9f9215a05f729db6f707c84967f4f11033d39d17ded98f4fe9fb48f3d1598596"
+  "hash": "dd8ae0f7baf2e4c51a93aafb4cde7846fefc0064c1c9fcac957b77054ac8736a"
 }

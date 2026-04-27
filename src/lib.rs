@@ -20,9 +20,3 @@ pub mod manager;
 
 /// calendar_manager meant to handle meal planning, cooked log, and shopping list logic.
 pub mod calendar_manager;
-
-/// The ID of the single placeholder user.
-/// All data is owned by this user until real authentication is fully wired up.
-/// When auth is complete, remove this constant and pass `auth.user_id` from
-/// the `AuthUser` extractor through the manager functions instead.
-pub const SINGLE_USER_ID: i64 = 1;

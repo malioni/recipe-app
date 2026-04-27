@@ -82,7 +82,7 @@ The following threat model should be kept in mind when making architectural deci
 
 ---
 
-### 26. [ ] Full Multi-User Support
+### 26. [x] Full Multi-User Support
 
 **Context:** The app currently uses a hardcoded `SINGLE_USER_ID` as an interim placeholder. Full multi-user support means users can register (or be invited), and all data is scoped to their `user_id`.
 
@@ -159,6 +159,32 @@ The following threat model should be kept in mind when making architectural deci
 ---
 
 ## Phase 6 — Future / Deferred
+
+### 37. [ ] User Deletion (Admin)
+
+**Context:** Admins can create and manage users (item 26) but cannot yet delete them. Deleting a user cascades automatically to their recipes, meal plan entries, and cooked log entries via `ON DELETE CASCADE`. Deferred until there is a clear operational need.
+
+**Actions:**
+
+- Add `DELETE /admin/users/:id` route and handler
+- Add `storage::delete_user(pool, user_id)` function
+- Add `manager::admin_delete_user(pool, admin_user_id, target_user_id)` — prevent self-deletion
+- Add integration test: deleting a user removes their recipes and calendar data
+
+---
+
+### 38. [ ] Self-Service Password Change
+
+**Context:** Currently only an admin can change passwords (item 26). Users should eventually be able to change their own password from a profile or settings page.
+
+**Actions:**
+
+- Add `GET /profile` page route serving `html/profile.html`
+- Add `POST /profile/password` handler accepting `{ current_password, new_password }`
+- In manager: verify `current_password` against stored hash before applying change
+- In manager: enforce minimum password length (≥ 8 chars)
+
+---
 
 ### 36. [ ] Apple Shortcuts Integration for Shopping List
 
