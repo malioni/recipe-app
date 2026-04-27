@@ -16,6 +16,8 @@ let pendingSlot = null;
 
 let pickModal = null;
 
+let lastShoppingListText = null; // plain-text copy of the last rendered shopping list
+
 // ----------------------------------------------------------------
 // Date helpers
 // ----------------------------------------------------------------
@@ -351,10 +353,16 @@ async function loadShoppingList() {
   const emptyEl = document.getElementById("shop-empty");
   const errorEl = document.getElementById("shop-error");
   const listEl = document.getElementById("shop-list");
+  const copyBtn = document.getElementById("btn-copy-shopping");
+  const feedbackEl = document.getElementById("shop-copy-feedback");
 
   emptyEl.classList.add("d-none");
   errorEl.classList.add("d-none");
   listEl.innerHTML = "";
+  lastShoppingListText = null;
+  copyBtn.classList.add("d-none");
+  feedbackEl.classList.add("d-none");
+  feedbackEl.textContent = "";
 
   try {
     const res = await fetch(
@@ -368,6 +376,7 @@ async function loadShoppingList() {
       return;
     }
 
+    const lines = [];
     ingredients.forEach((ing) => {
       const row = document.createElement("div");
       row.className = "ingredient-row";
@@ -390,10 +399,38 @@ async function loadShoppingList() {
       row.appendChild(nameSpan);
       row.appendChild(qtySpan);
       listEl.appendChild(row);
+
+      lines.push(`${ing.name} \u2014 ${qtyText}`);
     });
+
+    lastShoppingListText = lines.join("\n");
+    copyBtn.classList.remove("d-none");
   } catch (err) {
     console.error("Error loading shopping list:", err);
     errorEl.classList.remove("d-none");
+  }
+}
+
+// ----------------------------------------------------------------
+// Copy shopping list to clipboard
+// ----------------------------------------------------------------
+async function copyShoppingList() {
+  const feedbackEl = document.getElementById("shop-copy-feedback");
+  if (!lastShoppingListText) return;
+
+  try {
+    await navigator.clipboard.writeText(lastShoppingListText);
+    feedbackEl.textContent = "Copied!";
+    feedbackEl.classList.remove("d-none", "text-danger");
+    feedbackEl.classList.add("text-success");
+    setTimeout(() => {
+      feedbackEl.classList.add("d-none");
+      feedbackEl.textContent = "";
+    }, 2000);
+  } catch {
+    feedbackEl.textContent = "Could not copy \u2014 clipboard access denied.";
+    feedbackEl.classList.remove("d-none", "text-success");
+    feedbackEl.classList.add("text-danger");
   }
 }
 
@@ -413,6 +450,9 @@ window.addEventListener("DOMContentLoaded", async () => {
   document
     .getElementById("btn-generate-shopping")
     .addEventListener("click", loadShoppingList);
+  document
+    .getElementById("btn-copy-shopping")
+    .addEventListener("click", copyShoppingList);
 
   await loadWeek();
   loadShoppingList();
