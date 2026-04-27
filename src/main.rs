@@ -1,4 +1,4 @@
-use recipe_app::{auth, network, rate_limit, storage};
+use recipe_app::{auth, csrf, network, rate_limit, storage};
 use axum::{
     extract::DefaultBodyLimit,
     middleware::{self, Next},
@@ -18,7 +18,7 @@ use sqlx::sqlite::SqlitePoolOptions;
 use std::net::SocketAddr;
 use time::Duration as TimeDuration;
 use tokio::net::TcpListener;
-use tower_sessions::{Expiry, SessionManagerLayer};
+use tower_sessions::{cookie::SameSite, Expiry, SessionManagerLayer};
 use tower_sessions_sqlx_store::SqliteStore;
 
 #[tokio::main]
@@ -88,8 +88,13 @@ async fn main() {
         .expect("Failed to migrate session store");
 
     // Sessions expire after 7 days of inactivity.
+    // SameSite=Strict prevents the browser from sending the session cookie on
+    // any cross-site request (navigation or fetch), closing the primary CSRF
+    // vector. Note: bookmarked users arriving from an external link will land
+    // on /login once, then stay logged in — acceptable for a personal/LAN app.
     let session_layer = SessionManagerLayer::new(session_store)
         .with_secure(false)          // set to true when serving over HTTPS
+        .with_same_site(SameSite::Strict)
         .with_expiry(Expiry::OnInactivity(TimeDuration::days(7)));
 
     // Outer IP-based rate limiter: 5 tokens/s, 60 burst — applied to every route
@@ -149,9 +154,14 @@ async fn main() {
         .route("/profile", get(network::handle_profile_page))
         .route("/profile/me", get(network::handle_profile_me))
         .route("/profile/password", post(network::handle_change_own_password))
-        // inject_user_id (outer) must run before user_governor_layer (inner)
-        // so the SessionUserId extension is present when the key is extracted.
+        // Middleware order (outermost first):
+        //   inject_user_id → check_csrf → user_governor
+        // inject_user_id must run before user_governor so the SessionUserId
+        // extension is present when the key is extracted. check_csrf sits
+        // between them so it runs after the session is populated but before
+        // any handler logic.
         .layer(user_governor_layer)
+        .layer(middleware::from_fn(csrf::check_csrf))
         .layer(middleware::from_fn(rate_limit::inject_user_id));
 
     let app = Router::new()

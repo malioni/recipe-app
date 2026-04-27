@@ -23,11 +23,12 @@ use axum::{
     body::Body,
     extract::DefaultBodyLimit,
     http::{Request, StatusCode},
+    middleware,
     routing::{delete, get, post},
     Router,
 };
 use http_body_util::BodyExt;
-use recipe_app::{auth, network, storage};
+use recipe_app::{auth, csrf, network, storage};
 use sqlx::SqlitePool;
 use time::Duration as TimeDuration;
 use tower::ServiceExt;
@@ -85,6 +86,7 @@ async fn build_test_app() -> (Router, SqlitePool) {
         .route("/profile/me", get(network::handle_profile_me))
         .route("/profile/password", post(network::handle_change_own_password))
         .fallback(network::handle_404)
+        .layer(middleware::from_fn(csrf::check_csrf))
         .layer(session_layer)
         .layer(DefaultBodyLimit::max(64 * 1024))
         .with_state(pool.clone());
