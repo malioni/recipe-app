@@ -23,3 +23,6 @@ pub mod calendar_manager;
 
 /// Rate limiting utilities: session-user-id injection middleware and user-keyed extractor.
 pub mod rate_limit;
+
+/// CSRF protection middleware: Origin-check for state-mutating requests.
+pub mod csrf;

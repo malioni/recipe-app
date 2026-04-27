@@ -95,7 +95,7 @@ The following threat model should be kept in mind when making architectural deci
 
 ---
 
-### 35. [ ] CSRF Protection on State-Mutating Endpoints
+### 35. [x] CSRF Protection on State-Mutating Endpoints
 
 **Context:** A security review (2026-04-25) flagged that no CSRF token middleware is applied to the router. All state-mutating routes (POST `/calendar/entries`, DELETE `/recipes/:id`, POST `/calendar/cooked`, etc.) rely solely on session cookies. `SameSite=Lax` blocks cross-site form POSTs but not credentialed `fetch` calls from pages the user visits.
 
