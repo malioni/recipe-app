@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, name, source_url, ingredients, instructions FROM recipes WHERE id = ?",
+  "query": "SELECT id, username, password_hash, is_admin FROM users WHERE username = ?",
   "describe": {
     "columns": [
       {
@@ -9,36 +9,30 @@
         "type_info": "Integer"
       },
       {
-        "name": "name",
+        "name": "username",
         "ordinal": 1,
         "type_info": "Text"
       },
       {
-        "name": "source_url",
+        "name": "password_hash",
         "ordinal": 2,
         "type_info": "Text"
       },
       {
-        "name": "ingredients",
+        "name": "is_admin",
         "ordinal": 3,
-        "type_info": "Text"
-      },
-      {
-        "name": "instructions",
-        "ordinal": 4,
-        "type_info": "Text"
+        "type_info": "Integer"
       }
     ],
     "parameters": {
       "Right": 1
     },
     "nullable": [
-      false,
-      false,
       true,
+      false,
       false,
       false
     ]
   },
-  "hash": "0ac8a73bf4c590f1b1c3cc1d06397668080a0d1129dd66964eb3a935dcb1e9e1"
+  "hash": "8410d38286b207eb13f8d62180b15136968f4e61094c6ca8aca9652c430eb443"
 }
