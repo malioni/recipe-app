@@ -1,4 +1,4 @@
-use recipe_app::{auth, network, storage};
+use recipe_app::{auth, network, rate_limit, storage};
 use axum::{
     extract::DefaultBodyLimit,
     middleware::{self, Next},
@@ -10,7 +10,7 @@ use axum::{
 use tower_http::services::ServeDir;
 use std::sync::Arc;
 use tower_governor::{
-    governor::GovernorConfigBuilder, 
+    governor::GovernorConfigBuilder,
     GovernorLayer,
     key_extractor::PeerIpKeyExtractor,
 };
@@ -92,24 +92,39 @@ async fn main() {
         .with_secure(false)          // set to true when serving over HTTPS
         .with_expiry(Expiry::OnInactivity(TimeDuration::days(7)));
 
-    // Rate limiting: 60 requests per minute per IP address.
-    // replenish_rate is tokens added per second; burst_size is the maximum
-    // number of requests that can be made in a burst before throttling kicks in.
-    let governor_conf = Arc::new(
+    // Outer IP-based rate limiter: 5 tokens/s, 60 burst — applied to every route
+    // including login and static assets to cap raw request volume per IP.
+    let ip_governor_conf = Arc::new(
         GovernorConfigBuilder::default()
             .key_extractor(PeerIpKeyExtractor)
             .per_second(5)
             .burst_size(60)
             .finish()
-            .expect("Failed to build rate limiter config"),
+            .expect("Failed to build IP rate limiter config"),
     );
-    let governor_layer = GovernorLayer {
-        config: governor_conf,
+    let ip_governor_layer = GovernorLayer {
+        config: ip_governor_conf,
     };
 
-    let app = Router::new()
-        // Auth
-        .route("/login",  get(network::handle_login_page).post(network::handle_login))
+    // Per-user rate limiter: same token budget as the IP limiter, but scoped to
+    // each authenticated user_id. Falls back to peer IP for unauthenticated
+    // requests so the governor never returns 500 before AuthUser can redirect.
+    let user_governor_conf = Arc::new(
+        GovernorConfigBuilder::default()
+            .key_extractor(rate_limit::UserIdKeyExtractor)
+            .per_second(5)
+            .burst_size(60)
+            .finish()
+            .expect("Failed to build user rate limiter config"),
+    );
+    let user_governor_layer = GovernorLayer {
+        config: user_governor_conf,
+    };
+
+    // Authenticated sub-router: all routes that require a valid session.
+    // The inject_user_id middleware runs first (outer), populates the
+    // SessionUserId extension, then the user governor checks it (inner).
+    let authenticated = Router::new()
         .route("/logout", post(network::handle_logout))
         // Recipes
         .route("/", get(network::handle_index))
@@ -134,6 +149,14 @@ async fn main() {
         .route("/profile", get(network::handle_profile_page))
         .route("/profile/me", get(network::handle_profile_me))
         .route("/profile/password", post(network::handle_change_own_password))
+        // inject_user_id (outer) must run before user_governor_layer (inner)
+        // so the SessionUserId extension is present when the key is extracted.
+        .layer(user_governor_layer)
+        .layer(middleware::from_fn(rate_limit::inject_user_id));
+
+    let app = Router::new()
+        .merge(authenticated)
+        .route("/login", get(network::handle_login_page).post(network::handle_login))
         .fallback(network::handle_404)
         .nest_service("/static", ServeDir::new("static"))
         .layer(middleware::from_fn(add_csp_header))
@@ -142,7 +165,7 @@ async fn main() {
         // handler or session logic runs.
         .layer(session_layer)
         .layer(DefaultBodyLimit::max(64 * 1024)) // 64KB max request body
-        .layer(governor_layer)
+        .layer(ip_governor_layer)
         .with_state(pool);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 7878));
