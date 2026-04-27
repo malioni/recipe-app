@@ -111,7 +111,7 @@ The following threat model should be kept in mind when making architectural deci
 
 > Identified in code review. All tests use in-memory SQLite via the existing `setup()` helpers.
 
-### 31. [ ] Validation Edge Case Tests
+### 31. [x] Validation Edge Case Tests
 
 **Context:** Several validation constraints on `Recipe` and `Ingredient` structs are untested.
 
