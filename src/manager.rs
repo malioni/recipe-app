@@ -513,4 +513,40 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Validation"));
     }
+
+    // Boundary-passing tests: confirm limits are inclusive (exactly at the max is allowed).
+
+    #[tokio::test]
+    async fn test_add_recipe_exactly_50_ingredients() {
+        let pool = setup().await;
+        let ingredients = (0..50)
+            .map(|_| Ingredient { name: "x".to_string(), quantity: 1.0, unit: "g".to_string() })
+            .collect();
+        let r = Recipe { id: 0, name: "Boundary Ings".to_string(), source_url: None, ingredients, instructions: vec![] };
+        assert!(add_recipe(&pool, 1, r).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_add_recipe_exactly_100_instructions() {
+        let pool = setup().await;
+        let instructions = (0..100).map(|i| format!("Step {i}")).collect();
+        let r = Recipe { id: 0, name: "Boundary Steps".to_string(), source_url: None, ingredients: vec![], instructions };
+        assert!(add_recipe(&pool, 1, r).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_add_recipe_ingredient_name_exactly_100_chars() {
+        let pool = setup().await;
+        let ingredients = vec![Ingredient { name: "a".repeat(100), quantity: 1.0, unit: "g".to_string() }];
+        let r = Recipe { id: 0, name: "Boundary Name".to_string(), source_url: None, ingredients, instructions: vec![] };
+        assert!(add_recipe(&pool, 1, r).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_add_recipe_ingredient_unit_exactly_32_chars() {
+        let pool = setup().await;
+        let ingredients = vec![Ingredient { name: "Flour".to_string(), quantity: 1.0, unit: "u".repeat(32) }];
+        let r = Recipe { id: 0, name: "Boundary Unit".to_string(), source_url: None, ingredients, instructions: vec![] };
+        assert!(add_recipe(&pool, 1, r).await.is_ok());
+    }
 }

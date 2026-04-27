@@ -148,16 +148,6 @@ The following threat model should be kept in mind when making architectural deci
 
 ---
 
-### 34. [ ] Shopping List Unit Distinction Test
-
-**Context:** The shopping list merges ingredients with the same `(name, unit)`. Ingredients with the same name but different units (e.g. "Flour g" vs "Flour oz") must stay as separate entries. This is not currently tested.
-
-**Actions:**
-
-- `test_get_shopping_list_same_name_different_unit` — plan two meals with "Flour 200g" and "Flour 8oz"; assert the shopping list returns two entries (not one merged entry)
-
----
-
 ## Phase 6 — Future / Deferred
 
 ### 37. [x] User Deletion (Admin)
