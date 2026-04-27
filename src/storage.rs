@@ -691,4 +691,32 @@ mod tests {
         // Other versions are unaffected
         assert!(!is_migration_applied(&pool, "002").await.unwrap());
     }
+
+    #[tokio::test]
+    async fn test_delete_user() {
+        let pool = setup().await;
+        let id = create_user(&pool, "todelete", "hash").await.unwrap();
+        delete_user(&pool, id).await.expect("delete should succeed");
+        assert!(load_user_by_id(&pool, id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_delete_user_not_found() {
+        let pool = setup().await;
+        // Deleting a non-existent user is a no-op — idempotent by design.
+        assert!(delete_user(&pool, 999_999).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_delete_user_cascades_recipes() {
+        let pool = setup().await;
+        let recipe = Recipe {
+            id: 0, name: "User Recipe".to_string(), source_url: None,
+            ingredients: vec![], instructions: vec![],
+        };
+        let recipe_id = add_recipe(&pool, 1, &recipe).await.unwrap();
+        delete_user(&pool, 1).await.expect("delete should succeed");
+        // ON DELETE CASCADE must have removed the recipe
+        assert!(load_recipe(&pool, 1, recipe_id).await.is_err());
+    }
 }

@@ -386,4 +386,68 @@ mod tests {
         // User 1 should see their recipe
         assert_eq!(get_all_recipes(&pool, 1).await.len(), 1);
     }
+
+    #[tokio::test]
+    async fn test_admin_delete_user_valid() {
+        let pool = setup().await;
+        admin_create_user(&pool, "victim", "password123").await.unwrap();
+        let user = get_user_by_username(&pool, "victim").await.unwrap().unwrap();
+        admin_delete_user(&pool, 1, user.id).await.expect("delete should succeed");
+        assert!(get_user_by_username(&pool, "victim").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_admin_delete_user_self_deletion_blocked() {
+        let pool = setup().await;
+        let result = admin_delete_user(&pool, 1, 1).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_lowercase();
+        assert!(err.contains("self") || err.contains("own"));
+    }
+
+    #[tokio::test]
+    async fn test_admin_delete_user_not_found() {
+        let pool = setup().await;
+        // Deleting a non-existent user is a no-op — must return Ok
+        assert!(admin_delete_user(&pool, 1, 999_999).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_change_own_password_valid() {
+        let pool = setup().await;
+        let hash = crate::auth::hash_password("oldpassword").unwrap();
+        sqlx::query("INSERT INTO users (id, username, password_hash) VALUES (2, 'pwuser', ?)")
+            .bind(&hash)
+            .execute(&pool).await.unwrap();
+        change_own_password(&pool, 2, "oldpassword", "newpassword1").await
+            .expect("change should succeed");
+        let updated = get_user_by_username(&pool, "pwuser").await.unwrap().unwrap();
+        assert!(crate::auth::verify_password("newpassword1", &updated.password_hash).unwrap());
+        assert!(!crate::auth::verify_password("oldpassword", &updated.password_hash).unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_change_own_password_wrong_current() {
+        let pool = setup().await;
+        let hash = crate::auth::hash_password("correctpassword").unwrap();
+        sqlx::query("INSERT INTO users (id, username, password_hash) VALUES (2, 'pwuser2', ?)")
+            .bind(&hash)
+            .execute(&pool).await.unwrap();
+        let result = change_own_password(&pool, 2, "wrongpassword", "newpassword1").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_lowercase();
+        assert!(err.contains("incorrect") || err.contains("wrong"));
+    }
+
+    #[tokio::test]
+    async fn test_change_own_password_too_short() {
+        let pool = setup().await;
+        let hash = crate::auth::hash_password("correctpassword").unwrap();
+        sqlx::query("INSERT INTO users (id, username, password_hash) VALUES (2, 'pwuser3', ?)")
+            .bind(&hash)
+            .execute(&pool).await.unwrap();
+        let result = change_own_password(&pool, 2, "correctpassword", "short").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_lowercase().contains("password"));
+    }
 }
