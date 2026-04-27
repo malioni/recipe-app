@@ -450,4 +450,67 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().to_lowercase().contains("password"));
     }
+
+    #[tokio::test]
+    async fn test_add_recipe_empty_name() {
+        let pool = setup().await;
+        let result = add_recipe(&pool, 1, bare_recipe("")).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Validation"));
+    }
+
+    #[tokio::test]
+    async fn test_add_recipe_too_many_ingredients() {
+        let pool = setup().await;
+        let ingredients = (0..51)
+            .map(|_| Ingredient { name: "x".to_string(), quantity: 1.0, unit: "g".to_string() })
+            .collect();
+        let r = Recipe { id: 0, name: "Many Ings".to_string(), source_url: None, ingredients, instructions: vec![] };
+        let result = add_recipe(&pool, 1, r).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Validation"));
+    }
+
+    #[tokio::test]
+    async fn test_add_recipe_too_many_instructions() {
+        let pool = setup().await;
+        let instructions = (0..101).map(|i| format!("Step {i}")).collect();
+        let r = Recipe { id: 0, name: "Many Steps".to_string(), source_url: None, ingredients: vec![], instructions };
+        let result = add_recipe(&pool, 1, r).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Validation"));
+    }
+
+    #[tokio::test]
+    async fn test_add_recipe_ingredient_name_too_long() {
+        let pool = setup().await;
+        let ingredients = vec![Ingredient { name: "a".repeat(101), quantity: 1.0, unit: "g".to_string() }];
+        let r = Recipe { id: 0, name: "Bad Ing".to_string(), source_url: None, ingredients, instructions: vec![] };
+        let result = add_recipe(&pool, 1, r).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Validation"));
+    }
+
+    #[tokio::test]
+    async fn test_add_recipe_ingredient_unit_too_long() {
+        let pool = setup().await;
+        let ingredients = vec![Ingredient { name: "Flour".to_string(), quantity: 1.0, unit: "u".repeat(33) }];
+        let r = Recipe { id: 0, name: "Bad Unit".to_string(), source_url: None, ingredients, instructions: vec![] };
+        let result = add_recipe(&pool, 1, r).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Validation"));
+    }
+
+    #[tokio::test]
+    async fn test_add_recipe_source_url_empty_string() {
+        let pool = setup().await;
+        let r = Recipe {
+            id: 0, name: "Empty URL".to_string(),
+            source_url: Some("".to_string()),
+            ingredients: vec![], instructions: vec![],
+        };
+        let result = add_recipe(&pool, 1, r).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Validation"));
+    }
 }
