@@ -28,8 +28,17 @@ use crate::auth::SESSION_USER_ID_KEY;
 /// Typed request extension that holds the authenticated user's ID.
 ///
 /// Inserted by `inject_user_id` and consumed by `UserIdKeyExtractor`.
+/// The inner value is private to prevent callers from constructing a
+/// spoofed extension outside this module.
 #[derive(Clone, Debug)]
-pub struct SessionUserId(pub i64);
+pub struct SessionUserId(i64);
+
+impl SessionUserId {
+    /// Returns the authenticated user's ID.
+    pub fn user_id(&self) -> i64 {
+        self.0
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Middleware
@@ -42,9 +51,14 @@ pub struct SessionUserId(pub i64);
 /// function is a no-op — the extension is simply not inserted.
 pub async fn inject_user_id(mut req: Request<Body>, next: Next) -> Response {
     if let Some(session) = req.extensions().get::<Session>().cloned() {
-        let user_id: Option<i64> = session.get(SESSION_USER_ID_KEY).await.ok().flatten();
-        if let Some(uid) = user_id {
-            req.extensions_mut().insert(SessionUserId(uid));
+        match session.get::<i64>(SESSION_USER_ID_KEY).await {
+            Ok(Some(uid)) => {
+                req.extensions_mut().insert(SessionUserId(uid));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!("session read error in rate-limit middleware: {e}");
+            }
         }
     }
     next.run(req).await
@@ -70,7 +84,7 @@ impl KeyExtractor for UserIdKeyExtractor {
 
     fn extract<T>(&self, req: &Request<T>) -> Result<Self::Key, GovernorError> {
         if let Some(uid) = req.extensions().get::<SessionUserId>() {
-            return Ok(format!("u:{}", uid.0));
+            return Ok(format!("u:{}", uid.user_id()));
         }
         if let Some(addr) = req
             .extensions()
@@ -96,7 +110,7 @@ mod tests {
 
     fn make_request_with_user(user_id: i64) -> Request<()> {
         let mut req = Request::new(());
-        req.extensions_mut().insert(SessionUserId(user_id));
+        req.extensions_mut().insert(SessionUserId(user_id)); // allowed: same module
         req
     }
 
