@@ -421,7 +421,7 @@ async function copyShoppingList() {
   try {
     await navigator.clipboard.writeText(lastShoppingListText);
     feedbackEl.textContent = "Copied!";
-    feedbackEl.classList.remove("d-none", "text-danger");
+    feedbackEl.classList.remove("d-none", "text-danger", "text-muted");
     feedbackEl.classList.add("text-success");
     setTimeout(() => {
       feedbackEl.classList.add("d-none");
@@ -429,7 +429,7 @@ async function copyShoppingList() {
     }, 2000);
   } catch {
     feedbackEl.textContent = "Could not copy \u2014 clipboard access denied.";
-    feedbackEl.classList.remove("d-none", "text-success");
+    feedbackEl.classList.remove("d-none", "text-success", "text-muted");
     feedbackEl.classList.add("text-danger");
   }
 }
