@@ -778,9 +778,6 @@ async fn test_admin_cannot_delete_self_api() {
         .oneshot(delete_req(&format!("/admin/users/{}", admin_id), &admin_cookie))
         .await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST, "Self-deletion must be rejected with 400");
-
-    // Admin still exists.
-    let _ = pool; // pool captured to keep connection alive
 }
 
 /// Deleting a non-existent user is a no-op — returns 200.

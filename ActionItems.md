@@ -186,6 +186,18 @@ The following threat model should be kept in mind when making architectural deci
 
 ---
 
+### 39. [ ] Optimise `GET /profile/me` — direct user lookup
+
+**Context:** `handle_profile_me` currently calls `manager::admin_list_users` (full table scan) and filters in memory to find the current user. A targeted lookup by ID is cheaper and simpler.
+
+**Actions:**
+
+- Add `manager::get_user_info_by_id(pool, user_id) -> Result<Option<UserInfo>, String>` wrapping `storage::load_user_by_id`
+- Update `handle_profile_me` to call `manager::get_user_info_by_id` instead of `admin_list_users`
+- Add a unit test for the new manager function
+
+---
+
 ### 36. [ ] Apple Shortcuts Integration for Shopping List
 
 **Context:** An Apple Shortcut on iPhone could call `GET /calendar/shopping-list` and create individual Reminders items from the response — no native iOS app needed. Deferred until the clipboard approach (item 25) proves insufficient.
