@@ -70,7 +70,7 @@ The following threat model should be kept in mind when making architectural deci
 
 ---
 
-### 25. [ ] Shopping List — Copy to Clipboard
+### 25. [x] Shopping List — Copy to Clipboard
 
 **Context:** The shopping list panel has a generate button but no way to get the list onto a phone quickly. A "Copy" button using the Clipboard API (`navigator.clipboard.writeText()`) lets the user paste into Reminders, Notes, or any messaging app. Requires HTTPS or localhost (already satisfied) and a user gesture (button click).
 
