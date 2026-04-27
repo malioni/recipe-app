@@ -6,8 +6,8 @@
   try {
     const res = await fetch('/profile/me');
     if (res.ok) me = await res.json();
-  } catch (_) {
-    // If the endpoint is unreachable, render nav without admin link.
+  } catch (err) {
+    console.warn('nav: /profile/me unreachable, rendering without admin link', err);
   }
 
   const nav = document.createElement('nav');
