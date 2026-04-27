@@ -111,7 +111,7 @@ The following threat model should be kept in mind when making architectural deci
 
 > Identified in code review. All tests use in-memory SQLite via the existing `setup()` helpers.
 
-### 31. [ ] Validation Edge Case Tests
+### 31. [x] Validation Edge Case Tests
 
 **Context:** Several validation constraints on `Recipe` and `Ingredient` structs are untested.
 
@@ -145,16 +145,6 @@ The following threat model should be kept in mind when making architectural deci
 - `test_body_size_limit` — POST `/recipes` with a body larger than 64 KB, assert `413 Payload Too Large`
 - `test_index_route_smoke` — authenticated GET `/` returns `200`
 - `test_404_fallback` — authenticated GET `/does-not-exist` returns `404`
-
----
-
-### 34. [ ] Shopping List Unit Distinction Test
-
-**Context:** The shopping list merges ingredients with the same `(name, unit)`. Ingredients with the same name but different units (e.g. "Flour g" vs "Flour oz") must stay as separate entries. This is not currently tested.
-
-**Actions:**
-
-- `test_get_shopping_list_same_name_different_unit` — plan two meals with "Flour 200g" and "Flour 8oz"; assert the shopping list returns two entries (not one merged entry)
 
 ---
 
