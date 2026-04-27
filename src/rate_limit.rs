@@ -90,8 +90,7 @@ impl KeyExtractor for UserIdKeyExtractor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::extract::ConnectInfo;
-    use http::Request;
+    use axum::{extract::ConnectInfo, http::Request};
     use std::net::SocketAddr;
     use tower_governor::errors::GovernorError;
 
@@ -111,15 +110,26 @@ mod tests {
     #[test]
     fn test_user_key_extractor_prefers_session_user_id() {
         let req = make_request_with_user(42);
-        let result = UserIdKeyExtractor.extract(&req);
-        assert_eq!(result, Ok("u:42".to_string()));
+        let key = UserIdKeyExtractor.extract(&req).unwrap();
+        assert_eq!(key, "u:42");
     }
 
     #[test]
     fn test_user_key_extractor_falls_back_to_ip() {
         let req = make_request_with_ip("127.0.0.1", 1234);
-        let result = UserIdKeyExtractor.extract(&req);
-        assert_eq!(result, Ok("ip:127.0.0.1".to_string()));
+        let key = UserIdKeyExtractor.extract(&req).unwrap();
+        assert_eq!(key, "ip:127.0.0.1");
+    }
+
+    #[test]
+    fn test_user_key_extractor_user_id_beats_ip_when_both_present() {
+        // When both extensions are present user ID takes priority.
+        let addr: SocketAddr = "10.0.0.1:80".parse().unwrap();
+        let mut req = Request::new(());
+        req.extensions_mut().insert(SessionUserId(7));
+        req.extensions_mut().insert(ConnectInfo(addr));
+        let key = UserIdKeyExtractor.extract(&req).unwrap();
+        assert_eq!(key, "u:7");
     }
 
     #[test]
@@ -127,5 +137,30 @@ mod tests {
         let req = Request::new(());
         let result = UserIdKeyExtractor.extract(&req);
         assert!(matches!(result, Err(GovernorError::UnableToExtractKey)));
+    }
+
+    #[test]
+    fn test_user_key_extractor_different_user_ids_produce_distinct_keys() {
+        let req_a = make_request_with_user(1);
+        let req_b = make_request_with_user(2);
+        let key_a = UserIdKeyExtractor.extract(&req_a).unwrap();
+        let key_b = UserIdKeyExtractor.extract(&req_b).unwrap();
+        assert_ne!(key_a, key_b);
+    }
+
+    #[test]
+    fn test_user_key_extractor_different_ips_produce_distinct_keys() {
+        let req_a = make_request_with_ip("192.168.1.1", 80);
+        let req_b = make_request_with_ip("192.168.1.2", 80);
+        let key_a = UserIdKeyExtractor.extract(&req_a).unwrap();
+        let key_b = UserIdKeyExtractor.extract(&req_b).unwrap();
+        assert_ne!(key_a, key_b);
+    }
+
+    #[test]
+    fn test_user_key_extractor_ip_key_contains_address() {
+        let req = make_request_with_ip("10.20.30.40", 9000);
+        let key = UserIdKeyExtractor.extract(&req).unwrap();
+        assert!(key.contains("10.20.30.40"), "key should contain the IP: {key}");
     }
 }
