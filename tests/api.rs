@@ -23,7 +23,7 @@ use axum::{
     body::Body,
     extract::DefaultBodyLimit,
     http::{Request, StatusCode},
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use http_body_util::BodyExt;
@@ -80,6 +80,10 @@ async fn build_test_app() -> (Router, SqlitePool) {
         .route("/admin", get(network::handle_admin_page))
         .route("/admin/users", get(network::handle_admin_list_users).post(network::handle_admin_create_user))
         .route("/admin/users/password", post(network::handle_admin_change_password))
+        .route("/admin/users/:id", delete(network::handle_admin_delete_user))
+        .route("/profile", get(network::handle_profile_page))
+        .route("/profile/me", get(network::handle_profile_me))
+        .route("/profile/password", post(network::handle_change_own_password))
         .fallback(network::handle_404)
         .layer(session_layer)
         .layer(DefaultBodyLimit::max(64 * 1024))
@@ -721,6 +725,143 @@ async fn test_non_admin_cannot_access_admin_routes() {
         .oneshot(get_req("/admin/users", &user_cookie))
         .await.unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN, "Non-admin must be forbidden from /admin/users");
+}
+
+// ---------------------------------------------------------------------------
+// Admin user deletion tests
+// ---------------------------------------------------------------------------
+
+/// Admin can delete another user; that user no longer appears in the list.
+#[tokio::test]
+async fn test_admin_delete_user_api() {
+    let (app, pool) = build_test_app().await;
+    let admin_cookie = login(&app).await;
+
+    // Create a second user to delete.
+    let hash = auth::hash_password("password2").unwrap();
+    let victim_id = storage::create_user(&pool, "victim", &hash).await.unwrap();
+
+    let response = app.clone()
+        .oneshot(delete_req(&format!("/admin/users/{}", victim_id), &admin_cookie))
+        .await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "Admin should be able to delete another user");
+
+    // Verify the user is gone.
+    let list_response = app.clone()
+        .oneshot(get_req("/admin/users", &admin_cookie))
+        .await.unwrap();
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let body = list_response.into_body().collect().await.unwrap().to_bytes();
+    let users: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert!(
+        users.iter().all(|u| u["username"] != "victim"),
+        "Deleted user must not appear in the user list"
+    );
+}
+
+/// Admin receives 400 when attempting to delete their own account.
+#[tokio::test]
+async fn test_admin_cannot_delete_self_api() {
+    let (app, pool) = build_test_app().await;
+    let admin_cookie = login(&app).await;
+
+    // Fetch the admin's own ID via /profile/me.
+    let me_response = app.clone()
+        .oneshot(get_req("/profile/me", &admin_cookie))
+        .await.unwrap();
+    assert_eq!(me_response.status(), StatusCode::OK);
+    let body = me_response.into_body().collect().await.unwrap().to_bytes();
+    let me: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let admin_id = me["id"].as_i64().unwrap();
+
+    let response = app.clone()
+        .oneshot(delete_req(&format!("/admin/users/{}", admin_id), &admin_cookie))
+        .await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST, "Self-deletion must be rejected with 400");
+}
+
+/// Deleting a non-existent user is a no-op — returns 200.
+#[tokio::test]
+async fn test_admin_delete_nonexistent_user_api() {
+    let (app, _pool) = build_test_app().await;
+    let admin_cookie = login(&app).await;
+
+    let response = app.clone()
+        .oneshot(delete_req("/admin/users/999999", &admin_cookie))
+        .await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "Deleting a non-existent user must be a 200 no-op");
+}
+
+// ---------------------------------------------------------------------------
+// Self-service password change tests
+// ---------------------------------------------------------------------------
+
+/// Authenticated user can change their own password successfully.
+#[tokio::test]
+async fn test_change_own_password_api() {
+    let (app, _pool) = build_test_app().await;
+    let cookie = login(&app).await;
+
+    let response = app.clone()
+        .oneshot(json_req("POST", "/profile/password", &cookie, serde_json::json!({
+            "current_password": "password",
+            "new_password": "newpassword1"
+        })))
+        .await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "Valid password change should return 200");
+
+    // Old password must no longer work.
+    let login_req = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from("username=admin&password=password"))
+        .unwrap();
+    let login_res = app.clone().oneshot(login_req).await.unwrap();
+    let location = login_res.headers().get("location").unwrap().to_str().unwrap().to_string();
+    assert!(location.contains("error=1"), "Old password must be rejected after change");
+
+    // New password must work.
+    let login_req2 = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from("username=admin&password=newpassword1"))
+        .unwrap();
+    let login_res2 = app.clone().oneshot(login_req2).await.unwrap();
+    assert_eq!(login_res2.status(), StatusCode::SEE_OTHER);
+    let location2 = login_res2.headers().get("location").unwrap().to_str().unwrap();
+    assert!(!location2.contains("error=1"), "New password must be accepted");
+}
+
+/// Wrong current password returns 400.
+#[tokio::test]
+async fn test_change_own_password_wrong_current_api() {
+    let (app, _pool) = build_test_app().await;
+    let cookie = login(&app).await;
+
+    let response = app.clone()
+        .oneshot(json_req("POST", "/profile/password", &cookie, serde_json::json!({
+            "current_password": "wrongpassword",
+            "new_password": "newpassword1"
+        })))
+        .await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST, "Wrong current password must return 400");
+}
+
+/// New password shorter than 8 characters returns 400.
+#[tokio::test]
+async fn test_change_own_password_too_short_api() {
+    let (app, _pool) = build_test_app().await;
+    let cookie = login(&app).await;
+
+    let response = app.clone()
+        .oneshot(json_req("POST", "/profile/password", &cookie, serde_json::json!({
+            "current_password": "password",
+            "new_password": "short"
+        })))
+        .await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST, "Too-short new password must return 400");
 }
 
 /// Admin changes a user's password; old credentials fail and new ones succeed.

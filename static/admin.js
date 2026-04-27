@@ -1,4 +1,5 @@
 const alertArea = document.getElementById('alert-area');
+let currentUserId = null;
 
 function escapeHtml(s) {
   return String(s)
@@ -23,6 +24,25 @@ function showAlert(msg, type = 'success') {
   alertArea.appendChild(wrapper);
 }
 
+async function loadCurrentUser() {
+  const res = await fetch('/profile/me');
+  if (res.ok) {
+    const me = await res.json();
+    currentUserId = me.id;
+  }
+}
+
+async function deleteUser(id) {
+  const res = await fetch('/admin/users/' + id, { method: 'DELETE' });
+  const data = await res.json();
+  if (res.ok) {
+    showAlert('User deleted');
+    loadUsers();
+  } else {
+    showAlert(data.error || 'Failed to delete user', 'danger');
+  }
+}
+
 async function loadUsers() {
   const res = await fetch('/admin/users');
   if (!res.ok) { showAlert('Failed to load users', 'danger'); return; }
@@ -30,7 +50,7 @@ async function loadUsers() {
   const tbody = document.getElementById('user-rows');
   tbody.innerHTML = '';
   if (users.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-3">No users</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">No users</td></tr>';
     return;
   }
   users.forEach(u => {
@@ -51,10 +71,23 @@ async function loadUsers() {
     const tdCreated = document.createElement('td');
     tdCreated.textContent = u.created_at;
 
+    const tdAction = document.createElement('td');
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn btn-outline-danger btn-sm';
+    delBtn.textContent = 'Delete';
+    if (u.id === currentUserId) {
+      delBtn.disabled = true;
+      delBtn.title = 'Cannot delete your own account';
+    } else {
+      delBtn.addEventListener('click', () => deleteUser(u.id));
+    }
+    tdAction.appendChild(delBtn);
+
     tr.appendChild(tdId);
     tr.appendChild(tdName);
     tr.appendChild(tdAdmin);
     tr.appendChild(tdCreated);
+    tr.appendChild(tdAction);
     tbody.appendChild(tr);
   });
 }
@@ -98,4 +131,4 @@ document.getElementById('password-form').addEventListener('submit', async e => {
   }
 });
 
-loadUsers();
+loadCurrentUser().then(() => loadUsers());

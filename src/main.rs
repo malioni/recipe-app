@@ -4,7 +4,7 @@ use axum::{
     middleware::{self, Next},
     response::Response,
     http::Request,
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use tower_http::services::ServeDir;
@@ -129,6 +129,11 @@ async fn main() {
         .route("/admin", get(network::handle_admin_page))
         .route("/admin/users", get(network::handle_admin_list_users).post(network::handle_admin_create_user))
         .route("/admin/users/password", post(network::handle_admin_change_password))
+        .route("/admin/users/:id", delete(network::handle_admin_delete_user))
+        // Profile
+        .route("/profile", get(network::handle_profile_page))
+        .route("/profile/me", get(network::handle_profile_me))
+        .route("/profile/password", post(network::handle_change_own_password))
         .fallback(network::handle_404)
         .nest_service("/static", ServeDir::new("static"))
         .layer(middleware::from_fn(add_csp_header))

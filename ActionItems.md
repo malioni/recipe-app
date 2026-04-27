@@ -160,7 +160,7 @@ The following threat model should be kept in mind when making architectural deci
 
 ## Phase 6 — Future / Deferred
 
-### 37. [ ] User Deletion (Admin)
+### 37. [x] User Deletion (Admin)
 
 **Context:** Admins can create and manage users (item 26) but cannot yet delete them. Deleting a user cascades automatically to their recipes, meal plan entries, and cooked log entries via `ON DELETE CASCADE`. Deferred until there is a clear operational need.
 
@@ -173,7 +173,7 @@ The following threat model should be kept in mind when making architectural deci
 
 ---
 
-### 38. [ ] Self-Service Password Change
+### 38. [x] Self-Service Password Change
 
 **Context:** Currently only an admin can change passwords (item 26). Users should eventually be able to change their own password from a profile or settings page.
 
@@ -183,6 +183,18 @@ The following threat model should be kept in mind when making architectural deci
 - Add `POST /profile/password` handler accepting `{ current_password, new_password }`
 - In manager: verify `current_password` against stored hash before applying change
 - In manager: enforce minimum password length (≥ 8 chars)
+
+---
+
+### 39. [ ] Optimise `GET /profile/me` — direct user lookup
+
+**Context:** `handle_profile_me` currently calls `manager::admin_list_users` (full table scan) and filters in memory to find the current user. A targeted lookup by ID is cheaper and simpler.
+
+**Actions:**
+
+- Add `manager::get_user_info_by_id(pool, user_id) -> Result<Option<UserInfo>, String>` wrapping `storage::load_user_by_id`
+- Update `handle_profile_me` to call `manager::get_user_info_by_id` instead of `admin_list_users`
+- Add a unit test for the new manager function
 
 ---
 
