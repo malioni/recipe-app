@@ -63,8 +63,10 @@ async fn build_test_app() -> (Router, SqlitePool) {
         .with_secure(false)
         .with_expiry(Expiry::OnInactivity(TimeDuration::days(1)));
 
-    let app = Router::new()
-        .route("/login",  get(network::handle_login_page).post(network::handle_login))
+    // Mirror the production router structure: CSRF middleware scoped to the
+    // authenticated sub-router only, leaving POST /login unprotected (the
+    // session cookie's SameSite=Strict covers login CSRF at the browser level).
+    let authenticated = Router::new()
         .route("/logout", post(network::handle_logout))
         .route("/", get(network::handle_index))
         .route("/recipes", get(network::handle_all_recipes).post(network::handle_add_recipe))
@@ -85,8 +87,12 @@ async fn build_test_app() -> (Router, SqlitePool) {
         .route("/profile", get(network::handle_profile_page))
         .route("/profile/me", get(network::handle_profile_me))
         .route("/profile/password", post(network::handle_change_own_password))
+        .layer(middleware::from_fn(csrf::check_csrf));
+
+    let app = Router::new()
+        .merge(authenticated)
+        .route("/login", get(network::handle_login_page).post(network::handle_login))
         .fallback(network::handle_404)
-        .layer(middleware::from_fn(csrf::check_csrf))
         .layer(session_layer)
         .layer(DefaultBodyLimit::max(64 * 1024))
         .with_state(pool.clone());

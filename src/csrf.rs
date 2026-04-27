@@ -42,11 +42,12 @@ pub async fn check_csrf(req: Request<Body>, next: Next) -> Response {
 
     // Parse the origin URL and extract its host+port for comparison.
     // Expected format: "scheme://host" or "scheme://host:port".
+    // splitn(3, '/') on "http://host:port" yields ["http:", "", "host:port"];
+    // nth(2) then gives the authority component without a repeated-strip risk.
     let origin_host = origin
-        .trim_start_matches("http://")
-        .trim_start_matches("https://")
-        .split('/')
-        .next()
+        .splitn(3, '/')
+        .nth(2)
+        .and_then(|s| s.split('/').next())
         .unwrap_or("");
 
     if origin_host != host {
