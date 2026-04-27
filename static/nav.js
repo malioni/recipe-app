@@ -16,12 +16,23 @@
   const inner = document.createElement('div');
   inner.className = 'container-fluid';
 
-  // Brand
+  // Left-side brand links
+  const leftLinks = document.createElement('div');
+  leftLinks.className = 'd-flex align-items-center gap-3';
+
   const brand = document.createElement('a');
-  brand.className = 'navbar-brand fw-semibold';
+  brand.className = 'navbar-brand fw-semibold mb-0';
   brand.href = '/';
   brand.textContent = 'Recipes';
-  inner.appendChild(brand);
+  leftLinks.appendChild(brand);
+
+  const calendarLink = document.createElement('a');
+  calendarLink.href = '/calendar';
+  calendarLink.className = 'navbar-brand fw-semibold mb-0';
+  calendarLink.textContent = 'Meal Planner';
+  leftLinks.appendChild(calendarLink);
+
+  inner.appendChild(leftLinks);
 
   // Right-side links
   const links = document.createElement('div');
