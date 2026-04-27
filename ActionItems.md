@@ -160,7 +160,7 @@ The following threat model should be kept in mind when making architectural deci
 
 ## Phase 6 — Future / Deferred
 
-### 37. [ ] User Deletion (Admin)
+### 37. [x] User Deletion (Admin)
 
 **Context:** Admins can create and manage users (item 26) but cannot yet delete them. Deleting a user cascades automatically to their recipes, meal plan entries, and cooked log entries via `ON DELETE CASCADE`. Deferred until there is a clear operational need.
 
@@ -173,7 +173,7 @@ The following threat model should be kept in mind when making architectural deci
 
 ---
 
-### 38. [ ] Self-Service Password Change
+### 38. [x] Self-Service Password Change
 
 **Context:** Currently only an admin can change passwords (item 26). Users should eventually be able to change their own password from a profile or settings page.
 
