@@ -123,6 +123,23 @@ pub async fn update_password(pool: &SqlitePool, user_id: i64, password_hash: &st
     Ok(())
 }
 
+/// Deletes the user with the given ID.
+///
+/// All of the user's recipes, meal plan entries, and cooked log entries are
+/// removed automatically via `ON DELETE CASCADE`. Deleting a non-existent ID
+/// is a no-op — idempotent by design.
+///
+/// # Errors
+///
+/// Returns `Err` if the query fails.
+pub async fn delete_user(pool: &SqlitePool, user_id: i64) -> Result<(), String> {
+    sqlx::query!("DELETE FROM users WHERE id = ?", user_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to delete user: {e}"))?;
+    Ok(())
+}
+
 /// Inserts a new user with a pre-hashed password.
 ///
 /// The caller is responsible for hashing the password before calling this.

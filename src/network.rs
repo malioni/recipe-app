@@ -12,7 +12,7 @@ use tower_sessions::Session;
 use crate::auth::{self, AuthAdmin, AuthUser, SESSION_IS_ADMIN_KEY, SESSION_USER_ID_KEY};
 use crate::manager;
 use crate::calendar_manager;
-use crate::model::{ChangePasswordForm, CreateUserForm, LoginForm, MealEntry, CookedEntry, Recipe};
+use crate::model::{ChangePasswordForm, CreateUserForm, LoginForm, MealEntry, CookedEntry, Recipe, SelfChangePasswordForm};
 
 // ---------------------------------------------------------------------------
 // Auth handlers
@@ -391,6 +391,78 @@ pub async fn handle_admin_change_password(
         Err(err_msg) => {
             tracing::error!("Error changing password: {err_msg}");
             (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": err_msg })))
+        }
+    }
+}
+
+/// DELETE /admin/users/:id — deletes a user account and all their data.
+///
+/// Self-deletion is blocked; deleting a non-existent user is a no-op.
+pub async fn handle_admin_delete_user(
+    auth: AuthAdmin,
+    State(pool): State<SqlitePool>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    match manager::admin_delete_user(&pool, auth.user_id, id).await {
+        Ok(_) => {
+            tracing::info!("Admin deleted user_id: {}", id);
+            (StatusCode::OK, Json(serde_json::json!({ "status": "deleted" }))).into_response()
+        }
+        Err(err_msg) => {
+            tracing::error!("Error deleting user {id}: {err_msg}");
+            (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": err_msg }))).into_response()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Profile — self-service
+// ---------------------------------------------------------------------------
+
+/// GET /profile/me — returns the current user's public info as JSON.
+pub async fn handle_profile_me(
+    auth: AuthUser,
+    State(pool): State<SqlitePool>,
+) -> impl IntoResponse {
+    match manager::admin_list_users(&pool).await {
+        Ok(users) => {
+            match users.into_iter().find(|u| u.id == auth.user_id) {
+                Some(me) => (StatusCode::OK, Json(me)).into_response(),
+                None => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "User not found" }))).into_response(),
+            }
+        }
+        Err(err_msg) => {
+            tracing::error!("Error loading profile: {err_msg}");
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": err_msg }))).into_response()
+        }
+    }
+}
+
+/// GET /profile — serves the self-service password change page.
+pub async fn handle_profile_page(_auth: AuthUser) -> impl IntoResponse {
+    match tokio::fs::read_to_string("html/profile.html").await {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to read profile.html: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, Html("<h1>Internal Server Error</h1>".to_string())).into_response()
+        }
+    }
+}
+
+/// POST /profile/password — changes the authenticated user's own password.
+pub async fn handle_change_own_password(
+    auth: AuthUser,
+    State(pool): State<SqlitePool>,
+    Json(form): Json<SelfChangePasswordForm>,
+) -> impl IntoResponse {
+    match manager::change_own_password(&pool, auth.user_id, &form.current_password, &form.new_password).await {
+        Ok(_) => {
+            tracing::info!("User {} changed their password", auth.user_id);
+            (StatusCode::OK, Json(serde_json::json!({ "status": "updated" }))).into_response()
+        }
+        Err(err_msg) => {
+            tracing::error!("Password change error for user {}: {err_msg}", auth.user_id);
+            (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": err_msg }))).into_response()
         }
     }
 }

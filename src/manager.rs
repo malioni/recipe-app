@@ -137,6 +137,55 @@ pub async fn admin_list_users(pool: &SqlitePool) -> Result<Vec<UserInfo>, String
     storage::load_all_users(pool).await
 }
 
+/// Deletes a user account and all associated data.
+///
+/// Prevents an admin from deleting their own account. Deleting a non-existent
+/// user is a no-op — idempotent by design.
+///
+/// # Errors
+///
+/// Returns `Err` if `admin_user_id == target_user_id` (self-deletion) or the
+/// query fails.
+pub async fn admin_delete_user(pool: &SqlitePool, admin_user_id: i64, target_user_id: i64) -> Result<(), String> {
+    if admin_user_id == target_user_id {
+        return Err("Cannot delete your own account".to_string());
+    }
+    storage::delete_user(pool, target_user_id).await
+}
+
+/// Changes the authenticated user's own password.
+///
+/// Verifies `current_password` against the stored hash before applying the
+/// change. The new password must be at least 8 characters.
+///
+/// # Errors
+///
+/// Returns `Err` if the current password is incorrect, the new password is too
+/// short, the user does not exist, or the query fails.
+pub async fn change_own_password(
+    pool: &SqlitePool,
+    user_id: i64,
+    current_password: &str,
+    new_password: &str,
+) -> Result<(), String> {
+    let user = storage::load_user_by_id(pool, user_id)
+        .await?
+        .ok_or_else(|| "User not found".to_string())?;
+
+    let matches = auth::verify_password(current_password, &user.password_hash)
+        .map_err(|e| format!("Password verification error: {e}"))?;
+    if !matches {
+        return Err("Current password is incorrect".to_string());
+    }
+
+    if new_password.len() < 8 {
+        return Err("password must be at least 8 characters".to_string());
+    }
+
+    let hash = auth::hash_password(new_password)?;
+    storage::update_password(pool, user_id, &hash).await
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

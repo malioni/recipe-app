@@ -141,6 +141,13 @@ pub struct ChangePasswordForm {
     pub new_password: String,
 }
 
+/// Self-service form payload for changing the authenticated user's own password.
+#[derive(Deserialize, Debug)]
+pub struct SelfChangePasswordForm {
+    pub current_password: String,
+    pub new_password: String,
+}
+
 fn is_finite_positive(val: f32) -> Result<(), validator::ValidationError> {
     if val.is_finite() && val >= 0.0 {
         Ok(())
