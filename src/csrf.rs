@@ -55,3 +55,121 @@ pub async fn check_csrf(req: Request<Body>, next: Next) -> Response {
 
     next.run(req).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        middleware,
+        routing::get,
+        Router,
+    };
+    use tower::ServiceExt;
+
+    async fn ok() -> StatusCode {
+        StatusCode::OK
+    }
+
+    fn app() -> Router {
+        Router::new()
+            .route("/", get(ok).post(ok).put(ok).delete(ok))
+            .layer(middleware::from_fn(check_csrf))
+    }
+
+    fn make_req(method: &str, origin: Option<&str>, host: Option<&str>) -> Request<Body> {
+        let mut builder = Request::builder().method(method).uri("/");
+        if let Some(o) = origin {
+            builder = builder.header("origin", o);
+        }
+        if let Some(h) = host {
+            builder = builder.header("host", h);
+        }
+        builder.body(Body::empty()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_csrf_allows_get_with_cross_origin() {
+        // GET is never a CSRF risk — allowed regardless of Origin.
+        let res = app()
+            .oneshot(make_req("GET", Some("http://evil.com"), Some("127.0.0.1:7878")))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_allows_post_no_origin() {
+        // No Origin header → same-origin or non-browser client → allow.
+        let res = app()
+            .oneshot(make_req("POST", None, Some("127.0.0.1:7878")))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_allows_post_same_origin() {
+        // Origin matches Host → same-origin fetch → allow.
+        let res = app()
+            .oneshot(make_req(
+                "POST",
+                Some("http://127.0.0.1:7878"),
+                Some("127.0.0.1:7878"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_blocks_post_cross_origin() {
+        // Origin differs from Host → cross-origin POST → 403.
+        let res = app()
+            .oneshot(make_req(
+                "POST",
+                Some("http://evil.com"),
+                Some("127.0.0.1:7878"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_blocks_put_cross_origin() {
+        // PUT is a mutating method — also blocked when Origin mismatches.
+        let res = app()
+            .oneshot(make_req(
+                "PUT",
+                Some("http://evil.com"),
+                Some("127.0.0.1:7878"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_blocks_delete_cross_origin() {
+        // DELETE is a mutating method — also blocked when Origin mismatches.
+        let res = app()
+            .oneshot(make_req(
+                "DELETE",
+                Some("http://evil.com"),
+                Some("127.0.0.1:7878"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_allows_post_no_host() {
+        // No Host header → cannot validate → pass through rather than false-positive.
+        let res = app()
+            .oneshot(make_req("POST", Some("http://evil.com"), None))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+}
