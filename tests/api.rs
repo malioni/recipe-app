@@ -919,3 +919,56 @@ async fn test_admin_change_password_api() {
     let good_location = good_res.headers().get("location").unwrap().to_str().unwrap();
     assert!(!good_location.contains("error=1"), "New password should allow login");
 }
+
+// ---------------------------------------------------------------------------
+// /profile/me — nav bar data source tests
+// ---------------------------------------------------------------------------
+
+/// GET /profile/me as an admin returns is_admin: true (nav.js shows Admin link).
+#[tokio::test]
+async fn test_profile_me_returns_is_admin_true() {
+    let (app, _pool) = build_test_app().await;
+    let cookie = login(&app).await;
+
+    let response = app.clone()
+        .oneshot(get_req("/profile/me", &cookie))
+        .await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let me: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(me["is_admin"], true, "Admin user must have is_admin: true");
+    assert_eq!(me["username"], "admin");
+}
+
+/// GET /profile/me as a non-admin returns is_admin: false (nav.js hides Admin link).
+#[tokio::test]
+async fn test_profile_me_returns_is_admin_false() {
+    let (app, pool) = build_test_app().await;
+
+    let hash = auth::hash_password("password2").unwrap();
+    storage::create_user(&pool, "regularuser", &hash).await.unwrap();
+
+    let login_req = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from("username=regularuser&password=password2"))
+        .unwrap();
+    let login_res = app.clone().oneshot(login_req).await.unwrap();
+    let user_cookie = login_res
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str().unwrap()
+        .split(';').next().unwrap()
+        .to_string();
+
+    let response = app.clone()
+        .oneshot(get_req("/profile/me", &user_cookie))
+        .await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let me: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(me["is_admin"], false, "Non-admin user must have is_admin: false");
+    assert_eq!(me["username"], "regularuser");
+}
