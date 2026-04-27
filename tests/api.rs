@@ -770,7 +770,7 @@ async fn test_admin_delete_user_api() {
 /// Admin receives 400 when attempting to delete their own account.
 #[tokio::test]
 async fn test_admin_cannot_delete_self_api() {
-    let (app, pool) = build_test_app().await;
+    let (app, _pool) = build_test_app().await;
     let admin_cookie = login(&app).await;
 
     // Fetch the admin's own ID via /profile/me.
@@ -984,11 +984,12 @@ async fn test_delete_meal_entry_direct() {
     let recipe_id = recipes[0]["id"].as_i64().unwrap();
 
     // Plan it.
-    app.clone()
+    let plan_res = app.clone()
         .oneshot(json_req("POST", "/calendar/entries", &cookie, serde_json::json!({
             "date": "2026-10-01", "slot": "breakfast", "recipe_id": recipe_id
         })))
         .await.unwrap();
+    assert_eq!(plan_res.status(), StatusCode::CREATED);
 
     // Retrieve the entry id.
     let body = app.clone()
