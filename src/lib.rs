@@ -20,3 +20,6 @@ pub mod manager;
 
 /// calendar_manager meant to handle meal planning, cooked log, and shopping list logic.
 pub mod calendar_manager;
+
+/// Rate limiting utilities: session-user-id injection middleware and user-keyed extractor.
+pub mod rate_limit;

@@ -56,7 +56,7 @@ The following threat model should be kept in mind when making architectural deci
 
 ---
 
-### 24. [ ] Per-User Rate Limiting (Upgrade from IP-Based)
+### 24. [x] Per-User Rate Limiting (Upgrade from IP-Based)
 
 **Context:** Current rate limiting uses `PeerIpKeyExtractor` (IP-based). For a multi-user app, user-based limiting is more meaningful and accurate (multiple users may share an IP; a single user may rotate IPs).
 
