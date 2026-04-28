@@ -18,6 +18,25 @@ use axum::{
 /// Middleware that rejects cross-origin mutating requests.
 ///
 /// Apply to the authenticated sub-router via `middleware::from_fn(csrf::check_csrf)`.
+/// Read-only methods (`GET`, `HEAD`, `OPTIONS`) are always passed through. For all
+/// other methods the `Origin` header is compared against the `Host` header; if they
+/// differ the request is rejected immediately without reaching the handler.
+///
+/// # Parameters
+///
+/// - `req` — the incoming HTTP request, including its headers and method.
+/// - `next` — the next middleware or handler in the Axum middleware stack.
+///
+/// # Returns
+///
+/// The response from the rest of the middleware stack on success, or a
+/// `403 Forbidden` plain-text response if the CSRF check fails.
+///
+/// # Errors
+///
+/// Returns `403 Forbidden` when a mutating request carries an `Origin` header
+/// whose host component does not match the `Host` header. All other paths pass
+/// through to the next layer.
 pub async fn check_csrf(req: Request<Body>, next: Next) -> Response {
     // Read-only methods are never a CSRF risk.
     if matches!(

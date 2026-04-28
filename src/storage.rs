@@ -15,9 +15,20 @@ use crate::model::{Ingredient, Recipe, User, UserInfo};
 /// Used by the login flow to retrieve the stored password hash for
 /// verification. Returns `None` if no user exists with that username.
 ///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `username` — the exact username to look up (case-sensitive).
+///
+/// # Returns
+///
+/// `Ok(Some(user))` if a matching row is found; `Ok(None)` if no user has
+/// that username.
+///
 /// # Errors
 ///
-/// Returns `Err` if the query fails.
+/// Returns `Err` if the query fails or if the `id` column is unexpectedly
+/// `NULL` in the database (should never happen with a valid schema).
 pub async fn load_user_by_username(pool: &SqlitePool, username: &str) -> Result<Option<User>, String> {
     let row = sqlx::query!(
         "SELECT id, username, password_hash, is_admin FROM users WHERE username = ?",
@@ -27,17 +38,30 @@ pub async fn load_user_by_username(pool: &SqlitePool, username: &str) -> Result<
     .await
     .map_err(|e| format!("Failed to query user: {e}"))?;
 
-    Ok(row.map(|r| User {
-        id: r.id.unwrap_or(0),
-        username: r.username,
-        password_hash: r.password_hash,
-        is_admin: r.is_admin != 0,
-    }))
+    row.map(|r| {
+        Ok(User {
+            id: r.id.ok_or_else(|| "users.id is unexpectedly NULL".to_string())?,
+            username: r.username,
+            password_hash: r.password_hash,
+            is_admin: r.is_admin != 0,
+        })
+    })
+    .transpose()
 }
 
 /// Loads a user by their primary key.
 ///
 /// Returns `None` if no user exists with that ID.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the primary key of the user to retrieve.
+///
+/// # Returns
+///
+/// `Ok(Some(user))` if a matching row is found; `Ok(None)` if no user has
+/// that ID.
 ///
 /// # Errors
 ///
@@ -61,7 +85,18 @@ pub async fn load_user_by_id(pool: &SqlitePool, user_id: i64) -> Result<Option<U
 
 /// Loads a single user by their primary key as a public `UserInfo` record (no password hash).
 ///
-/// Returns `None` if no user exists with that ID.
+/// Prefer this over [`load_user_by_id`] whenever the result will be serialised
+/// into an API response, since `UserInfo` omits `password_hash`.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the primary key of the user to retrieve.
+///
+/// # Returns
+///
+/// `Ok(Some(info))` if a matching row is found; `Ok(None)` if no user has
+/// that ID.
 ///
 /// # Errors
 ///
@@ -83,7 +118,16 @@ pub async fn load_user_info_by_id(pool: &SqlitePool, user_id: i64) -> Result<Opt
     }))
 }
 
-/// Returns all users as public `UserInfo` records (no password hashes).
+/// Returns all users as public `UserInfo` records (no password hashes), ordered by ID.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+///
+/// # Returns
+///
+/// `Ok(users)` with all registered users ordered by ascending ID.
+/// Returns an empty `Vec` if no users exist.
 ///
 /// # Errors
 ///
@@ -109,6 +153,16 @@ pub async fn load_all_users(pool: &SqlitePool) -> Result<Vec<UserInfo>, String> 
 /// Called once at first-boot after the initial user is created, so the
 /// seeded account has admin privileges without needing a separate step.
 ///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the primary key of the user to promote.
+///
+/// # Returns
+///
+/// `Ok(())` on success. If the user does not exist the UPDATE affects zero
+/// rows but still returns `Ok(())` — idempotent by design.
+///
 /// # Errors
 ///
 /// Returns `Err` if the query fails.
@@ -127,10 +181,22 @@ pub async fn promote_user_to_admin(pool: &SqlitePool, user_id: i64) -> Result<()
 /// Updates the stored password hash for the given user.
 ///
 /// The caller is responsible for hashing the new password before calling this.
+/// Never pass a plaintext password; use [`crate::auth::hash_password`] first.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the primary key of the user whose password should be updated.
+/// - `password_hash` — the new PHC-format argon2id hash string to store.
+///
+/// # Returns
+///
+/// `Ok(())` on success.
 ///
 /// # Errors
 ///
-/// Returns `Err` if no user exists at `user_id` or the query fails.
+/// Returns `Err` if no user exists at `user_id` (zero rows affected) or the
+/// query fails.
 pub async fn update_password(pool: &SqlitePool, user_id: i64, password_hash: &str) -> Result<(), String> {
     let result = sqlx::query!(
         "UPDATE users SET password_hash = ? WHERE id = ?",
@@ -153,6 +219,15 @@ pub async fn update_password(pool: &SqlitePool, user_id: i64, password_hash: &st
 /// removed automatically via `ON DELETE CASCADE`. Deleting a non-existent ID
 /// is a no-op — idempotent by design.
 ///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the primary key of the user to delete.
+///
+/// # Returns
+///
+/// `Ok(())` on success, including when no row matched `user_id`.
+///
 /// # Errors
 ///
 /// Returns `Err` if the query fails.
@@ -167,11 +242,22 @@ pub async fn delete_user(pool: &SqlitePool, user_id: i64) -> Result<(), String> 
 /// Inserts a new user with a pre-hashed password.
 ///
 /// The caller is responsible for hashing the password before calling this.
-/// Returns the assigned user ID.
+/// Never pass a plaintext password; use [`crate::auth::hash_password`] first.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `username` — the unique username for the new account.
+/// - `password_hash` — the PHC-format argon2id hash of the user's password.
+///
+/// # Returns
+///
+/// `Ok(id)` where `id` is the SQLite-assigned primary key for the new user.
 ///
 /// # Errors
 ///
-/// Returns `Err` if the username is already taken or the query fails.
+/// Returns `Err` if the username is already taken (UNIQUE constraint violation)
+/// or the query fails for any other reason.
 pub async fn create_user(pool: &SqlitePool, username: &str, password_hash: &str) -> Result<i64, String> {
     let result = sqlx::query!(
         "INSERT INTO users (username, password_hash) VALUES (?, ?)",
@@ -185,10 +271,19 @@ pub async fn create_user(pool: &SqlitePool, username: &str, password_hash: &str)
     Ok(result.last_insert_rowid())
 }
 
-/// Returns true if the users table contains at least one row.
+/// Returns `true` if the `users` table contains at least one row.
 ///
 /// Used on startup to decide whether to seed the initial user from
-/// environment variables.
+/// environment variables. Prefer this over `COUNT(*)` for a cheap
+/// existence check — the query short-circuits after the first row.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+///
+/// # Returns
+///
+/// `Ok(true)` if at least one user exists; `Ok(false)` if the table is empty.
 ///
 /// # Errors
 ///
@@ -208,12 +303,26 @@ pub async fn any_users_exist(pool: &SqlitePool) -> Result<bool, String> {
 
 /// Loads a single recipe by its ID, scoped to the owning user.
 ///
-/// Returns `Err` if the recipe does not exist or belongs to a different user.
+/// The `user_id` filter ensures a user cannot read another user's recipes even
+/// if they guess the numeric ID. Returns `Ok(None)` when the recipe does not
+/// exist or belongs to a different user, distinguishing that case from a
+/// genuine database error.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the ID of the authenticated user; used to scope the lookup.
+/// - `id` — the primary key of the recipe to retrieve.
+///
+/// # Returns
+///
+/// `Ok(Some(recipe))` if a row matching both `id` and `user_id` is found;
+/// `Ok(None)` if no recipe matches (not found or belongs to another user).
 ///
 /// # Errors
 ///
-/// Returns `Err` if the query fails or no matching recipe exists.
-pub async fn load_recipe(pool: &SqlitePool, user_id: i64, id: i64) -> Result<Recipe, String> {
+/// Returns `Err` if the query or JSON deserialisation fails.
+pub async fn load_recipe(pool: &SqlitePool, user_id: i64, id: i64) -> Result<Option<Recipe>, String> {
     let row = sqlx::query!(
         "SELECT id, name, source_url, ingredients, instructions FROM recipes WHERE id = ? AND user_id = ?",
         id,
@@ -221,23 +330,35 @@ pub async fn load_recipe(pool: &SqlitePool, user_id: i64, id: i64) -> Result<Rec
     )
     .fetch_optional(pool)
     .await
-    .map_err(|e| format!("Failed to query recipe: {e}"))?
-    .ok_or_else(|| format!("Recipe with ID {} not found", id))?;
+    .map_err(|e| format!("Failed to query recipe: {e}"))?;
 
-    Ok(Recipe {
-        id: row.id,
-        name: row.name,
-        source_url: row.source_url,
-        ingredients: parse_ingredients(&row.ingredients)?,
-        instructions: parse_instructions(&row.instructions)?,
+    row.map(|r| {
+        Ok(Recipe {
+            id: r.id,
+            name: r.name,
+            source_url: r.source_url,
+            ingredients: parse_ingredients(&r.ingredients)?,
+            instructions: parse_instructions(&r.instructions)?,
+        })
     })
+    .transpose()
 }
 
-/// Loads every recipe from storage for the given user.
+/// Loads every recipe from storage for the given user, ordered by ID.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the ID of the authenticated user; only their recipes are returned.
+///
+/// # Returns
+///
+/// `Ok(recipes)` with all recipes owned by `user_id`, ordered by ascending ID.
+/// Returns an empty `Vec` if the user has no recipes.
 ///
 /// # Errors
 ///
-/// Returns `Err` if the query fails.
+/// Returns `Err` if the query or JSON deserialisation of any row fails.
 pub async fn load_all_recipes(pool: &SqlitePool, user_id: i64) -> Result<Vec<Recipe>, String> {
     let rows = sqlx::query!(
         "SELECT id, name, source_url, ingredients, instructions
@@ -263,9 +384,23 @@ pub async fn load_all_recipes(pool: &SqlitePool, user_id: i64) -> Result<Vec<Rec
 
 /// Inserts a new recipe for the given user, returning the assigned ID.
 ///
+/// Ingredients and instructions are serialised to JSON before insertion.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the ID of the authenticated user who owns the new recipe.
+/// - `recipe` — the recipe data to insert; the `id` field is ignored (SQLite
+///   assigns the real ID via `AUTOINCREMENT`).
+///
+/// # Returns
+///
+/// `Ok(id)` where `id` is the SQLite-assigned primary key for the new recipe.
+///
 /// # Errors
 ///
-/// Returns `Err` if serialization or the insert query fails.
+/// Returns `Err` if JSON serialisation of ingredients/instructions fails or the
+/// insert query fails (e.g. a constraint violation).
 pub async fn add_recipe(pool: &SqlitePool, user_id: i64, recipe: &Recipe) -> Result<i64, String> {
     let ingredients_json = serde_json::to_string(&recipe.ingredients)
         .map_err(|e| format!("Failed to serialize ingredients: {e}"))?;
@@ -290,11 +425,26 @@ pub async fn add_recipe(pool: &SqlitePool, user_id: i64, recipe: &Recipe) -> Res
 
 /// Replaces the recipe at `id` with the provided data, scoped to the owning user.
 ///
-/// Returns `Err` if no recipe exists at `id` for that user, or the update query fails.
+/// The `user_id` filter ensures a user cannot overwrite another user's recipe.
+/// All fields (name, source_url, ingredients, instructions) are replaced; `id`
+/// itself is unchanged.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the ID of the authenticated user; used to scope the update.
+/// - `id` — the primary key of the recipe to update.
+/// - `recipe` — the new recipe data to write; the `id` field in this struct is
+///   ignored in favour of the `id` parameter.
+///
+/// # Returns
+///
+/// `Ok(())` on success.
 ///
 /// # Errors
 ///
-/// Returns `Err` if the query fails or `rows_affected == 0`.
+/// Returns `Err` if the query fails, JSON serialisation of ingredients/instructions
+/// fails, or no row matches both `id` and `user_id` (zero rows affected).
 pub async fn save_recipe(pool: &SqlitePool, user_id: i64, id: i64, recipe: &Recipe) -> Result<(), String> {
     let ingredients_json = serde_json::to_string(&recipe.ingredients)
         .map_err(|e| format!("Failed to serialize ingredients: {e}"))?;
@@ -323,9 +473,19 @@ pub async fn save_recipe(pool: &SqlitePool, user_id: i64, id: i64, recipe: &Reci
 
 /// Deletes the recipe at `id`, scoped to the owning user.
 ///
-/// meal_plan and cooked_log entries referencing this recipe are removed
-/// automatically via ON DELETE CASCADE. Deleting a non-existent id or one
+/// `meal_plan` and `cooked_log` entries referencing this recipe are removed
+/// automatically via `ON DELETE CASCADE`. Deleting a non-existent id or one
 /// owned by a different user is a no-op — idempotent by design.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the ID of the authenticated user; only their recipes can be deleted.
+/// - `id` — the primary key of the recipe to delete.
+///
+/// # Returns
+///
+/// `Ok(())` on success, including when no row matched `id` and `user_id`.
 ///
 /// # Errors
 ///
@@ -347,7 +507,15 @@ pub async fn delete_recipe(pool: &SqlitePool, user_id: i64, id: i64) -> Result<(
 ///
 /// Must be called once at startup before any call to `is_migration_applied` or
 /// `record_migration`. Uses `CREATE TABLE IF NOT EXISTS` so it is safe to call
-/// on every boot.
+/// on every boot — subsequent calls are no-ops.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+///
+/// # Returns
+///
+/// `Ok(())` on success (first call) or when the table already exists.
 ///
 /// # Errors
 ///
@@ -371,10 +539,21 @@ pub async fn ensure_migrations_table(pool: &SqlitePool) -> Result<(), String> {
 /// Called by the startup migration runner after `is_migration_applied` confirms
 /// the version has not yet been applied. Keeping execution here ensures that
 /// all SQL — including DDL run at startup — stays within the storage layer.
+/// This function does **not** record the migration in `_schema_migrations`; the
+/// caller must call [`record_migration`] separately after a successful run.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `sql` — the full SQL string to execute (typically embedded via `include_str!`).
+///
+/// # Returns
+///
+/// `Ok(())` if the SQL executed without error.
 ///
 /// # Errors
 ///
-/// Returns `Err` if the query fails.
+/// Returns `Err` if the query fails (e.g. syntax error or constraint violation).
 pub async fn apply_migration(pool: &SqlitePool, sql: &str) -> Result<(), String> {
     sqlx::query(sql)
         .execute(pool)
@@ -386,7 +565,17 @@ pub async fn apply_migration(pool: &SqlitePool, sql: &str) -> Result<(), String>
 /// Returns `true` if the given migration version has already been recorded in
 /// `_schema_migrations`.
 ///
-/// Call `ensure_migrations_table` before this function.
+/// Call [`ensure_migrations_table`] before this function to guarantee the
+/// tracking table exists.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `version` — the migration version string to look up (e.g. `"001"`).
+///
+/// # Returns
+///
+/// `Ok(true)` if a row with `version` exists; `Ok(false)` if it does not.
 ///
 /// # Errors
 ///
@@ -403,12 +592,23 @@ pub async fn is_migration_applied(pool: &SqlitePool, version: &str) -> Result<bo
 
 /// Records a migration version in `_schema_migrations` after it has been applied.
 ///
-/// Returns `Err` if the version is already recorded (PRIMARY KEY violation) or
-/// the query otherwise fails.
+/// Must be called after [`apply_migration`] succeeds to mark the version as
+/// done. Subsequent calls to [`is_migration_applied`] for the same version
+/// will then return `true`.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `version` — the migration version string to record (e.g. `"001"`).
+///
+/// # Returns
+///
+/// `Ok(())` on success.
 ///
 /// # Errors
 ///
-/// Returns `Err` if the query fails.
+/// Returns `Err` if the version is already recorded (PRIMARY KEY violation)
+/// or the query otherwise fails.
 pub async fn record_migration(pool: &SqlitePool, version: &str) -> Result<(), String> {
     sqlx::query("INSERT INTO _schema_migrations (version) VALUES (?)")
         .bind(version)
@@ -504,7 +704,7 @@ mod tests {
             instructions: vec!["Boil water".to_string()],
         };
         let id = add_recipe(&pool, 1, &recipe).await.expect("Failed to add recipe");
-        let loaded = load_recipe(&pool, 1, id).await.expect("Failed to load recipe");
+        let loaded = load_recipe(&pool, 1, id).await.unwrap().expect("Expected recipe to exist");
         assert_eq!(loaded.name, "Pasta");
         assert_eq!(loaded.instructions, vec!["Boil water"]);
     }
@@ -513,7 +713,7 @@ mod tests {
     async fn test_load_recipe_invalid_id() {
         let pool = setup().await;
         let result = load_recipe(&pool, 1, 999_999).await;
-        assert!(result.is_err(), "Expected an error for a missing ID");
+        assert!(result.unwrap().is_none(), "Expected None for a missing ID");
     }
 
     #[tokio::test]
@@ -541,7 +741,7 @@ mod tests {
         };
         let id = add_recipe(&pool, 1, &recipe).await.expect("Failed to add recipe");
         delete_recipe(&pool, 1, id).await.expect("Failed to delete recipe");
-        assert!(load_recipe(&pool, 1, id).await.is_err());
+        assert!(load_recipe(&pool, 1, id).await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -560,7 +760,7 @@ mod tests {
             instructions: vec![],
         };
         save_recipe(&pool, 1, id, &updated).await.expect("Failed to update recipe");
-        let loaded = load_recipe(&pool, 1, id).await.expect("Failed to load recipe");
+        let loaded = load_recipe(&pool, 1, id).await.unwrap().expect("Expected recipe to exist");
         assert_eq!(loaded.name, "Updated");
         assert_eq!(loaded.source_url, Some("https://updated.com".to_string()));
     }
@@ -623,7 +823,7 @@ mod tests {
             instructions: vec!["Boil water".to_string(), "Add salt".to_string()],
         };
         let id = add_recipe(&pool, 1, &recipe).await.unwrap();
-        let loaded = load_recipe(&pool, 1, id).await.unwrap();
+        let loaded = load_recipe(&pool, 1, id).await.unwrap().unwrap();
         assert_eq!(loaded.ingredients.len(), 2);
         assert_eq!(loaded.ingredients[0].name, "Water");
         assert!((loaded.ingredients[0].quantity - 1.5).abs() < f32::EPSILON);
@@ -758,7 +958,7 @@ mod tests {
         let recipe_id = add_recipe(&pool, 1, &recipe).await.unwrap();
         delete_user(&pool, 1).await.expect("delete should succeed");
         // ON DELETE CASCADE must have removed the recipe
-        assert!(load_recipe(&pool, 1, recipe_id).await.is_err());
+        assert!(load_recipe(&pool, 1, recipe_id).await.unwrap().is_none());
     }
 
     #[tokio::test]

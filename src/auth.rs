@@ -40,6 +40,16 @@ pub const SESSION_IS_ADMIN_KEY: &str = "is_admin";
 /// The returned string is self-contained (algorithm + salt + hash) and
 /// can be stored directly in the `users.password_hash` column.
 ///
+/// # Parameters
+///
+/// - `password` — the plaintext password to hash. The caller is responsible for
+///   enforcing any minimum-length or complexity requirements before calling this.
+///
+/// # Returns
+///
+/// A PHC-format string (`$argon2id$...`) suitable for storage and later
+/// verification via [`verify_password`].
+///
 /// # Errors
 ///
 /// Returns `Err` if hashing fails (this should not happen in practice).
@@ -56,6 +66,21 @@ pub fn hash_password(password: &str) -> Result<String, String> {
 ///
 /// Returns `true` if the password matches, `false` otherwise.
 /// Returns `Err` only if the stored hash string is malformed.
+///
+/// # Parameters
+///
+/// - `password` — the plaintext password submitted by the user.
+/// - `hash` — the PHC-format hash string previously produced by [`hash_password`]
+///   and retrieved from storage.
+///
+/// # Returns
+///
+/// `Ok(true)` if the password matches the hash, `Ok(false)` if it does not.
+///
+/// # Errors
+///
+/// Returns `Err` if `hash` is not a valid PHC-format string (e.g. it has been
+/// truncated or corrupted in storage). A wrong password alone does not cause `Err`.
 pub fn verify_password(password: &str, hash: &str) -> Result<bool, String> {
     let parsed = PasswordHash::new(hash)
         .map_err(|e| format!("Malformed password hash: {e}"))?;
@@ -74,6 +99,16 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool, String> {
 /// The extractor reads the session and returns the authenticated user's ID
 /// via `auth.user_id`. If the session is missing or expired, the extractor
 /// returns a redirect to `/login` automatically — the handler code never runs.
+///
+/// # Returns
+///
+/// On success, provides `AuthUser { user_id }` where `user_id` is the
+/// authenticated user's primary key from the `users` table.
+///
+/// # Errors
+///
+/// Produces [`AuthRedirect`] (a `302` redirect to `/login`) when the session
+/// is absent, expired, or does not contain a `user_id` key.
 pub struct AuthUser {
     pub user_id: i64,
 }
@@ -134,6 +169,18 @@ where
 /// Add this as a parameter to any handler that requires admin privileges.
 /// Returns 403 Forbidden if the session is missing, expired, or the user
 /// does not have `is_admin = true`. The handler code never runs in that case.
+///
+/// # Returns
+///
+/// On success, provides `AuthAdmin { user_id }` where `user_id` is the
+/// authenticated admin's primary key from the `users` table.
+///
+/// # Errors
+///
+/// Produces [`AuthForbidden`] (`403 Forbidden`) when the session is absent,
+/// expired, does not contain a `user_id` key, or the `is_admin` flag is
+/// absent or `false`. Unlike [`AuthUser`], this extractor never redirects to
+/// `/login` — non-admin users receive 403 directly.
 pub struct AuthAdmin {
     pub user_id: i64,
 }

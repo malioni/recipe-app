@@ -19,9 +19,18 @@ const MAX_RECIPES_PER_USER: usize = 3;
 /// Returns `None` if no user exists with that username.
 /// Used by the login handler to retrieve the stored hash for verification.
 ///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `username` — the exact username to look up (case-sensitive).
+///
+/// # Returns
+///
+/// `Ok(Some(user))` if found; `Ok(None)` if no user has that username.
+///
 /// # Errors
 ///
-/// Returns `Err` if the query fails.
+/// Returns `Err` if the storage query fails.
 pub async fn get_user_by_username(pool: &SqlitePool, username: &str) -> Result<Option<User>, String> {
     storage::load_user_by_username(pool, username).await
 }
@@ -32,9 +41,18 @@ pub async fn get_user_by_username(pool: &SqlitePool, username: &str) -> Result<O
 /// never includes the password hash — it is safe to serialize directly into
 /// an API response.
 ///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the primary key of the user to retrieve.
+///
+/// # Returns
+///
+/// `Ok(Some(info))` if found; `Ok(None)` if no user has that ID.
+///
 /// # Errors
 ///
-/// Returns `Err` if the query fails.
+/// Returns `Err` if the storage query fails.
 pub async fn get_user_info_by_id(pool: &SqlitePool, user_id: i64) -> Result<Option<UserInfo>, String> {
     storage::load_user_info_by_id(pool, user_id).await
 }
@@ -45,17 +63,47 @@ pub async fn get_user_info_by_id(pool: &SqlitePool, user_id: i64) -> Result<Opti
 
 /// Retrieves a recipe by its ID, scoped to the owning user.
 ///
-/// Returns `Some(Recipe)` if found, `None` if the ID does not exist or
-/// belongs to a different user.
-pub async fn get_recipe_by_id(pool: &SqlitePool, user_id: i64, id: i64) -> Option<Recipe> {
-    storage::load_recipe(pool, user_id, id).await.ok()
+/// Returns `Ok(Some(recipe))` if found, `Ok(None)` if the ID does not exist
+/// or belongs to a different user. Storage errors are propagated as `Err`
+/// rather than silently collapsed into `None`.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the ID of the authenticated user; used to scope the lookup.
+/// - `id` — the primary key of the recipe to retrieve.
+///
+/// # Returns
+///
+/// `Ok(Some(recipe))` if found; `Ok(None)` if no recipe matches `id` and
+/// `user_id`.
+///
+/// # Errors
+///
+/// Returns `Err` if the storage query itself fails (e.g. database I/O error).
+pub async fn get_recipe_by_id(pool: &SqlitePool, user_id: i64, id: i64) -> Result<Option<Recipe>, String> {
+    storage::load_recipe(pool, user_id, id).await
 }
 
 /// Adds a new recipe to storage for the given user.
 ///
+/// Validates the recipe against its field constraints (name length, ingredient
+/// count, etc.) and enforces the per-user recipe quota before inserting.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the ID of the authenticated user who owns the new recipe.
+/// - `recipe` — the recipe to validate and persist.
+///
+/// # Returns
+///
+/// `Ok(())` on success.
+///
 /// # Errors
 ///
-/// Returns `Err` if validation fails or the recipe could not be persisted.
+/// Returns `Err` if validation fails, the per-user quota has been reached, or
+/// the storage insert fails.
 pub async fn add_recipe(pool: &SqlitePool, user_id: i64, recipe: Recipe) -> Result<(), String> {
     recipe.validate().map_err(|e| format!("Validation error: {e}"))?;
     let existing = storage::load_all_recipes(pool, user_id).await?;
@@ -68,28 +116,70 @@ pub async fn add_recipe(pool: &SqlitePool, user_id: i64, recipe: Recipe) -> Resu
 
 /// Deletes the recipe at the given ID, scoped to the owning user.
 ///
-/// Deleting a recipe owned by a different user is a no-op — idempotent by design.
+/// Deleting a recipe that does not exist, or one owned by a different user,
+/// is a no-op — idempotent by design. Associated `meal_plan` and `cooked_log`
+/// entries are removed automatically via `ON DELETE CASCADE`.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the ID of the authenticated user; only their recipes can be deleted.
+/// - `id` — the primary key of the recipe to delete.
+///
+/// # Returns
+///
+/// `Ok(())` on success, including when no matching recipe was found.
 ///
 /// # Errors
 ///
-/// Returns `Err` if the query fails.
+/// Returns `Err` if the storage query fails.
 pub async fn delete_recipe(pool: &SqlitePool, user_id: i64, id: i64) -> Result<(), String> {
     storage::delete_recipe(pool, user_id, id).await
 }
 
 /// Returns all recipes for the given user.
 ///
-/// Returns an empty Vec if the query fails.
-pub async fn get_all_recipes(pool: &SqlitePool, user_id: i64) -> Vec<Recipe> {
-    storage::load_all_recipes(pool, user_id).await.unwrap_or_default()
+/// Results are ordered by ascending ID. Storage errors are propagated as `Err`
+/// rather than silently collapsed into an empty list.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the ID of the authenticated user; only their recipes are returned.
+///
+/// # Returns
+///
+/// `Ok(recipes)` with all recipes owned by `user_id`. Returns `Ok(vec![])` if
+/// the user has no recipes.
+///
+/// # Errors
+///
+/// Returns `Err` if the storage query or JSON deserialisation fails.
+pub async fn get_all_recipes(pool: &SqlitePool, user_id: i64) -> Result<Vec<Recipe>, String> {
+    storage::load_all_recipes(pool, user_id).await
 }
 
 /// Updates an existing recipe by ID, scoped to the owning user.
 ///
+/// Validates the recipe against its field constraints before updating. The
+/// `user_id` filter ensures a user cannot overwrite another user's recipe.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the ID of the authenticated user; used to scope the update.
+/// - `id` — the primary key of the recipe to update.
+/// - `recipe` — the new recipe data; the `id` field in this struct is ignored
+///   in favour of the `id` parameter.
+///
+/// # Returns
+///
+/// `Ok(())` on success.
+///
 /// # Errors
 ///
-/// Returns `Err` if validation fails, no recipe exists at `id` for that user,
-/// or the query fails.
+/// Returns `Err` if validation fails, no recipe matches `id` and `user_id`,
+/// or the storage query fails.
 pub async fn update_recipe(pool: &SqlitePool, user_id: i64, id: i64, recipe: Recipe) -> Result<(), String> {
     recipe.validate().map_err(|e| format!("Validation error: {e}"))?;
     storage::save_recipe(pool, user_id, id, &recipe).await
@@ -105,10 +195,22 @@ pub async fn update_recipe(pool: &SqlitePool, user_id: i64, id: i64, recipe: Rec
 /// and that the password is at least 8 characters. The password is hashed
 /// before storage; the plaintext is never persisted.
 ///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `username` — the desired username for the new account. Must be 1–50
+///   non-whitespace characters.
+/// - `password` — the plaintext password for the new account. Must be at least
+///   8 characters. Hashed via argon2id before storage.
+///
+/// # Returns
+///
+/// `Ok(())` on success.
+///
 /// # Errors
 ///
-/// Returns `Err` if validation fails, the username is already taken, or the
-/// query fails.
+/// Returns `Err` if username or password validation fails, the username is
+/// already taken, or the storage insert fails.
 pub async fn admin_create_user(pool: &SqlitePool, username: &str, password: &str) -> Result<(), String> {
     if username.is_empty() || username.len() > 50 {
         return Err("Username must be between 1 and 50 characters".to_string());
@@ -124,15 +226,28 @@ pub async fn admin_create_user(pool: &SqlitePool, username: &str, password: &str
     Ok(())
 }
 
-/// Changes a user's password.
+/// Changes a user's password (admin action).
 ///
 /// Validates that the new password is at least 8 characters, then hashes and
-/// persists it.
+/// persists it. The admin's own identity is not verified here; route-level
+/// `AuthAdmin` extraction handles that.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `target_user_id` — the primary key of the user whose password is being
+///   changed. Can be any user, including the calling admin.
+/// - `new_password` — the new plaintext password. Must be at least 8 characters.
+///   Hashed via argon2id before storage.
+///
+/// # Returns
+///
+/// `Ok(())` on success.
 ///
 /// # Errors
 ///
-/// Returns `Err` if the password is too short, the user does not exist, or
-/// the query fails.
+/// Returns `Err` if the new password is too short, the target user does not
+/// exist, or the storage update fails.
 pub async fn admin_change_password(pool: &SqlitePool, target_user_id: i64, new_password: &str) -> Result<(), String> {
     if new_password.len() < 8 {
         return Err("password must be at least 8 characters".to_string());
@@ -141,11 +256,24 @@ pub async fn admin_change_password(pool: &SqlitePool, target_user_id: i64, new_p
     storage::update_password(pool, target_user_id, &hash).await
 }
 
-/// Returns all registered users as public records (no password hashes).
+/// Returns all registered users as public records (no password hashes), ordered by ID.
+///
+/// Intended for the admin user-management page. The returned [`UserInfo`]
+/// records never include password hashes and are safe to serialise into an API
+/// response.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+///
+/// # Returns
+///
+/// `Ok(users)` with all registered users ordered by ascending ID. Returns an
+/// empty `Vec` if no users exist.
 ///
 /// # Errors
 ///
-/// Returns `Err` if the query fails.
+/// Returns `Err` if the storage query fails.
 pub async fn admin_list_users(pool: &SqlitePool) -> Result<Vec<UserInfo>, String> {
     storage::load_all_users(pool).await
 }
@@ -153,12 +281,25 @@ pub async fn admin_list_users(pool: &SqlitePool) -> Result<Vec<UserInfo>, String
 /// Deletes a user account and all associated data.
 ///
 /// Prevents an admin from deleting their own account. Deleting a non-existent
-/// user is a no-op — idempotent by design.
+/// user is a no-op — idempotent by design. All of the target user's recipes,
+/// meal plan entries, and cooked log entries are removed automatically via
+/// `ON DELETE CASCADE`.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `admin_user_id` — the primary key of the admin performing the deletion.
+///   Used only to block self-deletion.
+/// - `target_user_id` — the primary key of the user to delete.
+///
+/// # Returns
+///
+/// `Ok(())` on success, including when no user matched `target_user_id`.
 ///
 /// # Errors
 ///
-/// Returns `Err` if `admin_user_id == target_user_id` (self-deletion) or the
-/// query fails.
+/// Returns `Err` if `admin_user_id == target_user_id` (self-deletion is
+/// blocked) or the storage query fails.
 pub async fn admin_delete_user(pool: &SqlitePool, admin_user_id: i64, target_user_id: i64) -> Result<(), String> {
     if admin_user_id == target_user_id {
         return Err("Cannot delete your own account".to_string());
@@ -169,12 +310,26 @@ pub async fn admin_delete_user(pool: &SqlitePool, admin_user_id: i64, target_use
 /// Changes the authenticated user's own password.
 ///
 /// Verifies `current_password` against the stored hash before applying the
-/// change. The new password must be at least 8 characters.
+/// change. The new password must be at least 8 characters. This is the
+/// self-service variant; for admin-initiated changes see [`admin_change_password`].
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the primary key of the authenticated user changing their password.
+/// - `current_password` — the user's existing plaintext password, used to
+///   confirm identity before the change is applied.
+/// - `new_password` — the new plaintext password. Must be at least 8 characters.
+///   Hashed via argon2id before storage.
+///
+/// # Returns
+///
+/// `Ok(())` on success.
 ///
 /// # Errors
 ///
 /// Returns `Err` if the current password is incorrect, the new password is too
-/// short, the user does not exist, or the query fails.
+/// short, the user does not exist, or the storage update fails.
 pub async fn change_own_password(
     pool: &SqlitePool,
     user_id: i64,
@@ -269,8 +424,8 @@ mod tests {
     async fn test_get_recipe_by_id_found() {
         let pool = setup().await;
         add_recipe(&pool, 1, bare_recipe("Soup")).await.unwrap();
-        let id = get_all_recipes(&pool, 1).await[0].id;
-        let found = get_recipe_by_id(&pool, 1, id).await;
+        let id = get_all_recipes(&pool, 1).await.unwrap()[0].id;
+        let found = get_recipe_by_id(&pool, 1, id).await.unwrap();
         assert!(found.is_some());
         assert_eq!(found.unwrap().name, "Soup");
     }
@@ -278,41 +433,41 @@ mod tests {
     #[tokio::test]
     async fn test_get_recipe_by_id_not_found() {
         let pool = setup().await;
-        assert!(get_recipe_by_id(&pool, 1, 999_999).await.is_none());
+        assert!(get_recipe_by_id(&pool, 1, 999_999).await.unwrap().is_none());
     }
 
     #[tokio::test]
     async fn test_get_all_recipes_empty_then_populated() {
         let pool = setup().await;
-        assert!(get_all_recipes(&pool, 1).await.is_empty());
+        assert!(get_all_recipes(&pool, 1).await.unwrap().is_empty());
         add_recipe(&pool, 1, bare_recipe("Cake")).await.unwrap();
-        assert_eq!(get_all_recipes(&pool, 1).await.len(), 1);
+        assert_eq!(get_all_recipes(&pool, 1).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
     async fn test_delete_recipe() {
         let pool = setup().await;
         add_recipe(&pool, 1, bare_recipe("Stew")).await.unwrap();
-        let id = get_all_recipes(&pool, 1).await[0].id;
+        let id = get_all_recipes(&pool, 1).await.unwrap()[0].id;
         delete_recipe(&pool, 1, id).await.expect("Delete should succeed");
-        assert!(get_recipe_by_id(&pool, 1, id).await.is_none());
+        assert!(get_recipe_by_id(&pool, 1, id).await.unwrap().is_none());
     }
 
     #[tokio::test]
     async fn test_update_recipe_valid() {
         let pool = setup().await;
         add_recipe(&pool, 1, bare_recipe("Old Name")).await.unwrap();
-        let id = get_all_recipes(&pool, 1).await[0].id;
+        let id = get_all_recipes(&pool, 1).await.unwrap()[0].id;
         let updated = Recipe { id, name: "New Name".to_string(), source_url: None, ingredients: vec![], instructions: vec![] };
         update_recipe(&pool, 1, id, updated).await.expect("Update should succeed");
-        assert_eq!(get_recipe_by_id(&pool, 1, id).await.unwrap().name, "New Name");
+        assert_eq!(get_recipe_by_id(&pool, 1, id).await.unwrap().unwrap().name, "New Name");
     }
 
     #[tokio::test]
     async fn test_update_recipe_invalid_name() {
         let pool = setup().await;
         add_recipe(&pool, 1, bare_recipe("Valid")).await.unwrap();
-        let id = get_all_recipes(&pool, 1).await[0].id;
+        let id = get_all_recipes(&pool, 1).await.unwrap()[0].id;
         let bad = Recipe { id, name: "a".repeat(201), source_url: None, ingredients: vec![], instructions: vec![] };
         assert!(update_recipe(&pool, 1, id, bad).await.is_err());
     }
@@ -395,9 +550,9 @@ mod tests {
         // User 1 adds a recipe
         add_recipe(&pool, 1, bare_recipe("User1 Recipe")).await.unwrap();
         // User 2 should see no recipes
-        assert!(get_all_recipes(&pool, 2).await.is_empty());
+        assert!(get_all_recipes(&pool, 2).await.unwrap().is_empty());
         // User 1 should see their recipe
-        assert_eq!(get_all_recipes(&pool, 1).await.len(), 1);
+        assert_eq!(get_all_recipes(&pool, 1).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -576,5 +731,19 @@ mod tests {
         let pool = setup().await;
         let result = get_user_info_by_id(&pool, 999_999).await.unwrap();
         assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_admin_list_users_returns_all() {
+        let pool = setup().await;
+        admin_create_user(&pool, "user2", "password123").await.unwrap();
+        admin_create_user(&pool, "user3", "password456").await.unwrap();
+        let users = admin_list_users(&pool).await.unwrap();
+        // setup() inserts user id=1 ('test'), plus two created above
+        assert_eq!(users.len(), 3);
+        let usernames: Vec<&str> = users.iter().map(|u| u.username.as_str()).collect();
+        assert!(usernames.contains(&"test"));
+        assert!(usernames.contains(&"user2"));
+        assert!(usernames.contains(&"user3"));
     }
 }

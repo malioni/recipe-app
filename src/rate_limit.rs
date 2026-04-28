@@ -34,7 +34,15 @@ use crate::auth::SESSION_USER_ID_KEY;
 pub struct SessionUserId(i64);
 
 impl SessionUserId {
-    /// Returns the authenticated user's ID.
+    /// Returns the authenticated user's primary key.
+    ///
+    /// # Returns
+    ///
+    /// The `i64` user ID stored in the session.
+    ///
+    /// # Errors
+    ///
+    /// This method never fails.
     pub fn user_id(&self) -> i64 {
         self.0
     }
@@ -49,6 +57,21 @@ impl SessionUserId {
 /// Must run inside the `SessionManagerLayer` so the `Session` extension is
 /// already populated. When there is no authenticated user in the session the
 /// function is a no-op — the extension is simply not inserted.
+///
+/// # Parameters
+///
+/// - `req` — the incoming HTTP request; mutated to insert the `SessionUserId`
+///   extension when a user ID is found in the session.
+/// - `next` — the next middleware or handler in the Axum middleware stack.
+///
+/// # Returns
+///
+/// The response produced by the rest of the middleware stack.
+///
+/// # Errors
+///
+/// Session read errors are logged as warnings and silently ignored — the
+/// request continues without the `SessionUserId` extension.
 pub async fn inject_user_id(mut req: Request<Body>, next: Next) -> Response {
     if let Some(session) = req.extensions().get::<Session>().cloned() {
         match session.get::<i64>(SESSION_USER_ID_KEY).await {

@@ -2,31 +2,55 @@ use serde::{Deserialize, Serialize};
 use chrono::NaiveDate;
 use validator::Validate;
 
+/// A single ingredient in a recipe, combining a name with a measured quantity and unit.
+///
+/// Validated by the `validator` crate: `name` must be 1–100 characters, `quantity`
+/// must be finite and non-negative, and `unit` must be at most 32 characters.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[derive(Validate)]
 pub struct Ingredient {
+    /// Display name of the ingredient (e.g. `"flour"`, `"unsalted butter"`).
+    /// Must be between 1 and 100 characters.
     #[validate(length(min = 1, max = 100))]
     pub name: String,
+    /// How much of the ingredient is required, expressed in `unit`.
+    /// Must be finite and non-negative (zero is allowed for trace amounts).
     #[validate(custom(function = "is_finite_positive"))]
     pub quantity: f32,
+    /// The unit of measurement (e.g. `"g"`, `"ml"`, `"cup"`, `"clove"`).
+    /// An empty string is accepted for unitless count-based ingredients.
+    /// Must be at most 32 characters.
     #[validate(length(max = 32))]
     pub unit: String,
 }
 
+/// The core domain type representing a saved recipe.
+///
+/// Ingredients and instructions are stored as JSON arrays in the `recipes` SQLite
+/// table and deserialised into `Vec<Ingredient>` / `Vec<String>` on load. Validation
+/// constraints are applied by the `validator` crate and enforced in the manager layer
+/// before any storage call.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 #[derive(Validate)]
 pub struct Recipe {
-    /// SQLite AUTOINCREMENT returns i64; using i64 throughout avoids casting.
+    /// Database primary key assigned by SQLite `AUTOINCREMENT`.
+    /// Use `0` (the `Default`) when constructing a new recipe for insertion;
+    /// the value is replaced by the real ID after `add_recipe` returns.
+    /// `i64` is used throughout to match the type returned by `sqlx`.
     #[serde(default)]
     pub id: i64,
+    /// Human-readable name for the recipe (e.g. `"Sourdough Bread"`).
+    /// Must be between 1 and 200 characters.
     #[validate(length(min = 1, max = 200))]
     pub name: String,
     /// Link to the website where this recipe was originally found.
     /// Not all recipes have a source, so this field is optional.
     #[validate(url, length(max = 500))]
     pub source_url: Option<String>,
+    /// Ordered list of ingredients. At most 50 ingredients are allowed per recipe.
     #[validate(length(max = 50), nested)]
     pub ingredients: Vec<Ingredient>,
+    /// Ordered list of preparation steps. At most 100 steps are allowed per recipe.
     #[validate(length(max = 100))]
     pub instructions: Vec<String>,
 }

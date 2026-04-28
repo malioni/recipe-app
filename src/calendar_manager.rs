@@ -42,9 +42,24 @@ const MAX_PORTIONS: i64 = 10;
 
 /// Returns all planned meals within `[start, end]` (inclusive) for the given user.
 ///
+/// Validates that `start <= end` before querying storage. Results are ordered
+/// by date then by slot.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the ID of the authenticated user; only their entries are returned.
+/// - `start` — the first date of the range (inclusive).
+/// - `end` — the last date of the range (inclusive).
+///
+/// # Returns
+///
+/// `Ok(entries)` with all planned meals in the range. Returns an empty `Vec`
+/// if no entries fall within `[start, end]`.
+///
 /// # Errors
 ///
-/// Returns `Err` if the date range is invalid or the query fails.
+/// Returns `Err` if `start > end` or the storage query fails.
 pub async fn get_meals_in_range(
     pool: &SqlitePool,
     user_id: i64,
@@ -57,12 +72,29 @@ pub async fn get_meals_in_range(
 
 /// Plans a recipe for a specific date and slot for the given user.
 ///
-/// Multiple entries per slot are allowed up to `MAX_ENTRIES_PER_SLOT`.
+/// Performs three checks before inserting: (1) `portions` is within `[1, MAX_PORTIONS]`;
+/// (2) `recipe_id` exists and is owned by `user_id`; (3) neither the per-user
+/// total quota nor the per-slot limit has been reached.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the ID of the authenticated user planning the meal.
+/// - `date` — the day on which the meal is planned.
+/// - `slot` — which meal of the day (`Breakfast`, `Lunch`, or `Dinner`).
+/// - `recipe_id` — the primary key of the recipe to plan; must be owned by `user_id`.
+/// - `portions` — the serving multiplier applied to ingredient quantities in the
+///   shopping list. Must be between 1 and `MAX_PORTIONS` (10 in production).
+///
+/// # Returns
+///
+/// `Ok(())` on success.
 ///
 /// # Errors
 ///
-/// Returns `Err` if the recipe ID does not exist or is owned by a different user,
-/// a quota is exceeded, or the query fails.
+/// Returns `Err` if `portions` is out of range, the recipe does not exist for
+/// the user, the per-user plan quota is reached, the per-slot limit is reached,
+/// or the storage query fails.
 pub async fn plan_meal(
     pool: &SqlitePool,
     user_id: i64,
@@ -76,16 +108,12 @@ pub async fn plan_meal(
     }
 
     // Verify the recipe exists and belongs to this user before linking it.
-    storage::load_recipe(pool, user_id, recipe_id).await
-        .map_err(|_| format!("Recipe with ID {} not found", recipe_id))?;
+    storage::load_recipe(pool, user_id, recipe_id).await?
+        .ok_or_else(|| format!("Recipe with ID {} not found", recipe_id))?;
 
-    // Enforce per-user meal plan quota. Use a large window to count all entries.
-    let all_entries = calendar_storage::load_meal_entries_in_range(
-        pool, user_id,
-        chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
-        chrono::NaiveDate::from_ymd_opt(9999, 12, 31).unwrap(),
-    ).await?;
-    if all_entries.len() >= MAX_MEAL_PLAN_ENTRIES {
+    // Enforce per-user meal plan quota using a COUNT(*) query — no rows loaded.
+    let total = calendar_storage::count_all_meal_entries(pool, user_id).await?;
+    if total >= MAX_MEAL_PLAN_ENTRIES {
         return Err(format!("Meal plan limit of {} entries reached", MAX_MEAL_PLAN_ENTRIES));
     }
 
@@ -104,9 +132,19 @@ pub async fn plan_meal(
 /// Deleting a non-existent id or one owned by a different user is a no-op —
 /// idempotent by design.
 ///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the ID of the authenticated user; only their entries can be deleted.
+/// - `id` — the primary key of the meal plan entry to remove.
+///
+/// # Returns
+///
+/// `Ok(())` on success, including when no row matched `id` and `user_id`.
+///
 /// # Errors
 ///
-/// Returns `Err` if the query fails.
+/// Returns `Err` if the storage query fails.
 pub async fn remove_planned_meal(pool: &SqlitePool, user_id: i64, id: i64) -> Result<(), String> {
     calendar_storage::delete_meal_entry(pool, user_id, id).await
 }
@@ -117,20 +155,33 @@ pub async fn remove_planned_meal(pool: &SqlitePool, user_id: i64, id: i64) -> Re
 
 /// Marks a recipe as cooked on the given date for the given user.
 ///
-/// Duplicate entries for the same date and recipe are silently ignored.
+/// Verifies the recipe exists and belongs to `user_id` before inserting.
+/// Duplicate entries for the same `(user_id, date, recipe_id)` are silently
+/// ignored via `INSERT OR IGNORE`.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the ID of the authenticated user marking the recipe as cooked.
+/// - `date` — the day on which the recipe was cooked.
+/// - `recipe_id` — the primary key of the recipe; must be owned by `user_id`.
+///
+/// # Returns
+///
+/// `Ok(())` on success, including when an identical entry already exists.
 ///
 /// # Errors
 ///
-/// Returns `Err` if the recipe ID does not exist or belongs to a different user,
-/// or the query fails.
+/// Returns `Err` if the recipe does not exist for the user, or the storage
+/// query fails.
 pub async fn mark_as_cooked(
     pool: &SqlitePool,
     user_id: i64,
     date: NaiveDate,
     recipe_id: i64,
 ) -> Result<(), String> {
-    storage::load_recipe(pool, user_id, recipe_id).await
-        .map_err(|_| format!("Recipe with ID {} not found", recipe_id))?;
+    storage::load_recipe(pool, user_id, recipe_id).await?
+        .ok_or_else(|| format!("Recipe with ID {} not found", recipe_id))?;
 
     let entry = CookedEntry { date, recipe_id };
     calendar_storage::add_cooked_entry(pool, user_id, &entry).await
@@ -138,9 +189,23 @@ pub async fn mark_as_cooked(
 
 /// Returns all cooked entries within `[start, end]` (inclusive) for the given user.
 ///
+/// Validates that `start <= end` before querying storage.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the ID of the authenticated user; only their entries are returned.
+/// - `start` — the first date of the range (inclusive).
+/// - `end` — the last date of the range (inclusive).
+///
+/// # Returns
+///
+/// `Ok(entries)` with all cooked log entries in the range. Returns an empty
+/// `Vec` if no entries fall within `[start, end]`.
+///
 /// # Errors
 ///
-/// Returns `Err` if the date range is invalid or the query fails.
+/// Returns `Err` if `start > end` or the storage query fails.
 pub async fn get_cooked_in_range(
     pool: &SqlitePool,
     user_id: i64,
@@ -163,14 +228,27 @@ pub async fn get_cooked_in_range(
 /// 100 g/ml threshold; 100 g / 100 ml above it, then expressed in kg/l), and
 /// imperial values are ceiled to the nearest whole `oz` (weight) or `fl oz`
 /// (volume). Count-based or unrecognised units pass through unchanged with
-/// `imperial_quantity = None`.
+/// `imperial_quantity = None`. All ingredient names in the output are
+/// lowercased so that `"Flour"` and `"flour"` from different recipes merge
+/// into a single line.
 ///
-/// All ingredient names in the output are lowercased for consistency.
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the ID of the authenticated user; only their planned meals are used.
+/// - `start` — the first date of the range (inclusive).
+/// - `end` — the last date of the range (inclusive).
+///
+/// # Returns
+///
+/// `Ok(items)` with one [`ShoppingListItem`] per unique `(lowercase_name,
+/// canonical_unit)` pair across all planned meals in the range. Returns an
+/// empty `Vec` if no meals are planned.
 ///
 /// # Errors
 ///
-/// Returns `Err` if the date range is invalid, the query fails, or a
-/// referenced recipe no longer exists.
+/// Returns `Err` if `start > end`, the query fails, or a recipe referenced by
+/// a meal plan entry no longer exists in the database.
 pub async fn get_shopping_list(
     pool: &SqlitePool,
     user_id: i64,
@@ -191,8 +269,8 @@ pub async fn get_shopping_list(
     let mut aggregated: Vec<Ingredient> = Vec::new();
 
     for entry in entries {
-        let recipe = storage::load_recipe(pool, user_id, entry.recipe_id).await
-            .map_err(|_| format!("Recipe with ID {} not found", entry.recipe_id))?;
+        let recipe = storage::load_recipe(pool, user_id, entry.recipe_id).await?
+            .ok_or_else(|| format!("Recipe with ID {} not found", entry.recipe_id))?;
 
         let scale = entry.portions as f32;
         for ingredient in recipe.ingredients {
@@ -914,6 +992,9 @@ mod tests {
         assert_eq!(u, "g"); assert!((q - 28.3495).abs() < 0.001);
 
         let (u, q) = normalise_unit("lb", 1.0);
+        assert_eq!(u, "g"); assert!((q - 453.592).abs() < 0.001);
+
+        let (u, q) = normalise_unit("lbs", 1.0);
         assert_eq!(u, "g"); assert!((q - 453.592).abs() < 0.001);
 
         let (u, q) = normalise_unit("pounds", 1.0);
