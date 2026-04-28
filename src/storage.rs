@@ -366,6 +366,23 @@ pub async fn ensure_migrations_table(pool: &SqlitePool) -> Result<(), String> {
     Ok(())
 }
 
+/// Executes a raw migration SQL string against the database.
+///
+/// Called by the startup migration runner after `is_migration_applied` confirms
+/// the version has not yet been applied. Keeping execution here ensures that
+/// all SQL — including DDL run at startup — stays within the storage layer.
+///
+/// # Errors
+///
+/// Returns `Err` if the query fails.
+pub async fn apply_migration(pool: &SqlitePool, sql: &str) -> Result<(), String> {
+    sqlx::query(sql)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to execute migration SQL: {e}"))?;
+    Ok(())
+}
+
 /// Returns `true` if the given migration version has already been recorded in
 /// `_schema_migrations`.
 ///

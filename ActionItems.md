@@ -203,6 +203,21 @@ The following threat model should be kept in mind when making architectural deci
 
 ---
 
+### 40. [ ] Enforce Minimum Password Strength on Initial Setup
+
+**Context:** The initial admin user is seeded from `INITIAL_USERNAME` / `INITIAL_PASSWORD`
+environment variables in `main.rs` at first boot. No minimum length or strength check is
+applied at this point — an operator who sets a very short password will not be warned.
+
+**Actions:**
+
+- Add a password length check (≥ 8 characters) in `main.rs` before calling
+  `auth::hash_password` for the initial user, failing fast with a clear error message.
+- Consider reusing `manager::change_own_password`'s minimum-length check so the rule
+  is enforced in a single place.
+
+---
+
 ## Dependency Reference
 
 | Package                     | Current | Purpose             | Notes                                                                             |

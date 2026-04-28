@@ -100,10 +100,15 @@ pub async fn handle_logout(session: Session) -> impl IntoResponse {
 // Recipes
 // ---------------------------------------------------------------------------
 
+/// GET / — serves the main recipe list page.
+///
+/// Requires a valid session; the `AuthUser` extractor redirects to `/login` if
+/// the session is missing or expired.
 pub async fn handle_index(_auth: AuthUser) -> impl IntoResponse {
     Html(HTML_INDEX)
 }
 
+/// GET /recipes — returns all recipes for the authenticated user as JSON.
 pub async fn handle_all_recipes(
     auth: AuthUser,
     State(pool): State<SqlitePool>,
@@ -111,6 +116,10 @@ pub async fn handle_all_recipes(
     Json(manager::get_all_recipes(&pool, auth.user_id).await)
 }
 
+/// GET /recipes/:id — returns a single recipe as JSON, or `404` if not found.
+///
+/// The lookup is scoped to the authenticated user; a recipe owned by another
+/// user is treated as not found.
 pub async fn handle_recipe(
     auth: AuthUser,
     State(pool): State<SqlitePool>,
@@ -136,6 +145,9 @@ pub async fn handle_new_recipe_page(_auth: AuthUser) -> impl IntoResponse {
     Html(HTML_ADD_RECIPE)
 }
 
+/// POST /recipes — validates and inserts a new recipe for the authenticated user.
+///
+/// Returns `201 Created` on success, or `500` if validation or the insert fails.
 pub async fn handle_add_recipe(
     auth: AuthUser,
     State(pool): State<SqlitePool>,
@@ -153,6 +165,11 @@ pub async fn handle_add_recipe(
     }
 }
 
+/// DELETE /recipes/:id — deletes a recipe owned by the authenticated user.
+///
+/// Meal plan and cooked log entries that reference this recipe are removed
+/// automatically via `ON DELETE CASCADE`. Deleting a non-existent ID is a
+/// no-op. Returns `500` only if the delete query itself fails.
 pub async fn handle_delete_recipe(
     auth: AuthUser,
     State(pool): State<SqlitePool>,
@@ -170,6 +187,10 @@ pub async fn handle_delete_recipe(
     }
 }
 
+/// PUT /recipes/:id — replaces all fields of an existing recipe.
+///
+/// The update is scoped to the authenticated user. Returns `500` if the
+/// recipe does not exist for that user or the query fails.
 pub async fn handle_update_recipe(
     auth: AuthUser,
     State(pool): State<SqlitePool>,
@@ -209,6 +230,10 @@ pub struct DeleteMealParams {
 // Calendar — page
 // ---------------------------------------------------------------------------
 
+/// GET /calendar — serves the calendar and meal planning HTML page.
+///
+/// Requires a valid session; the `AuthUser` extractor redirects to `/login` if
+/// the session is missing or expired.
 pub async fn handle_calendar_page(_auth: AuthUser) -> impl IntoResponse {
     Html(HTML_CALENDAR)
 }
@@ -269,7 +294,10 @@ pub async fn handle_delete_meal_entry(
 // Calendar — cooked log
 // ---------------------------------------------------------------------------
 
-/// POST /calendar/cooked
+/// POST /calendar/cooked — records that a recipe was cooked on a given date.
+///
+/// Returns `201 Created` on success, or `400 Bad Request` if the recipe does not
+/// exist for the authenticated user or the entry cannot be stored.
 pub async fn handle_mark_cooked(
     auth: AuthUser,
     State(pool): State<SqlitePool>,
@@ -287,7 +315,11 @@ pub async fn handle_mark_cooked(
     }
 }
 
-/// GET /calendar/cooked?start=YYYY-MM-DD&end=YYYY-MM-DD
+/// GET /calendar/cooked?start=YYYY-MM-DD&end=YYYY-MM-DD — returns cooked log entries
+/// for the authenticated user within the given date range (inclusive).
+///
+/// Returns `200 OK` with a JSON array, or `400 Bad Request` if the range is invalid
+/// (e.g. start is after end).
 pub async fn handle_get_cooked_entries(
     auth: AuthUser,
     State(pool): State<SqlitePool>,
@@ -445,6 +477,11 @@ pub async fn handle_change_own_password(
 // ---------------------------------------------------------------------------
 // Error Handling
 // ---------------------------------------------------------------------------
+
+/// Fallback handler — returns `404 Not Found` with the 404 HTML page.
+///
+/// Registered via `Router::fallback` in `main.rs` and triggered for any request
+/// that does not match a defined route.
 pub async fn handle_404() -> Response {
     (StatusCode::NOT_FOUND, Html(HTML_404)).into_response()
 }
