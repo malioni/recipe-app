@@ -309,10 +309,6 @@ mod tests {
             .expect("Failed to create in-memory database");
         sqlx::query(include_str!("../migrations/001_initial.sql"))
             .execute(&pool).await.expect("Failed to run migration 001");
-        sqlx::query(include_str!("../migrations/002_multiple_entries_per_slot.sql"))
-            .execute(&pool).await.expect("Failed to run migration 002");
-        sqlx::query(include_str!("../migrations/003_add_portions_to_meal_plan.sql"))
-            .execute(&pool).await.expect("Failed to run migration 003");
         sqlx::query("INSERT INTO users (id, username, password_hash) VALUES (1, 'test', 'placeholder')")
             .execute(&pool)
             .await
