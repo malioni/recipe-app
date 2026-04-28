@@ -11,18 +11,29 @@ use crate::calendar_storage;
 use crate::storage;
 
 /// Maximum number of meal plan entries a single user may have at once.
+///
+/// Acts as an application-level storage cap: a user with thousands of entries
+/// would cause the weekly calendar queries to become slow and the shopping list
+/// to be unusably large. 1 000 covers roughly 2–3 years of daily planning.
 #[cfg(not(test))]
 const MAX_MEAL_PLAN_ENTRIES: usize = 1000;
 #[cfg(test)]
 const MAX_MEAL_PLAN_ENTRIES: usize = 3;
 
 /// Maximum number of entries allowed per (user, date, slot) combination.
+///
+/// Allows a user to plan a main dish plus one or two sides for the same meal
+/// slot without filling the UI card with an unbounded number of recipes.
 #[cfg(not(test))]
 const MAX_ENTRIES_PER_SLOT: usize = 3;
 #[cfg(test)]
 const MAX_ENTRIES_PER_SLOT: usize = 2;
 
-/// Maximum number of portions allowed per meal plan entry.
+/// Maximum number of portions (serving multiplier) allowed per meal plan entry.
+///
+/// Portions scale all ingredient quantities in the shopping list. A cap of 10
+/// prevents accidental overflow values that would produce nonsensical quantities
+/// (e.g. 500 portions of flour).
 const MAX_PORTIONS: i64 = 10;
 
 // ---------------------------------------------------------------------------
@@ -173,6 +184,10 @@ pub async fn get_shopping_list(
     ).await?;
 
     // Accumulate in base units (g / ml) keyed by (lowercase_name, canonical_unit).
+    // Using lowercase name means "Flour" and "flour" merge into one entry.
+    // Using canonical unit means weight-flour (g) and volume-flour (ml) stay
+    // separate, because they are physically different measurements that cannot
+    // be summed.
     let mut aggregated: Vec<Ingredient> = Vec::new();
 
     for entry in entries {
@@ -205,10 +220,27 @@ pub async fn get_shopping_list(
 /// Converts an internally-accumulated `(name, base_unit, base_qty)` triple into
 /// a display-ready [`ShoppingListItem`].
 ///
-/// `base_unit` must be one of `"g"`, `"ml"`, or an unrecognised passthrough.
-/// Metric quantities are ceiled to a step (10 below the 100-unit threshold,
-/// 100 above it) and expressed in `g`/`kg` or `ml`/`l`. Imperial quantities
-/// are ceiled to the nearest whole `oz` (weight) or `fl oz` (volume).
+/// **`base_unit`** must be one of `"g"`, `"ml"`, or an unrecognised passthrough
+/// (e.g. `"clove"`, `"piece"`, `""`).
+///
+/// **Metric rounding** — quantities are ceiled to a human-friendly step:
+/// - Below 100: step of 10 → stays in `g` / `ml`  (e.g. 61 g → 70 g)
+/// - 100 or above: step of 100, then divided by 1 000 → expressed in `kg` / `l`
+///   (e.g. 650 g → 0.7 kg)
+///
+/// The threshold `< 100.0` means exactly 100 g goes to the kg branch (0.1 kg).
+///
+/// **Imperial conversion factors** (applied to the raw base quantity before ceiling):
+/// - Weight: 1 g = 0.035274 oz  → `ceil(base_qty × 0.035274)` oz
+/// - Volume: 1 ml = 0.033814 fl oz → `ceil(base_qty × 0.033814)` fl oz
+///
+/// Passthrough units have no imperial equivalent; `imperial_quantity` and
+/// `imperial_unit` are `None`.
+///
+/// # Example
+///
+/// `to_display_item("flour", "g", 650.0)` → `ShoppingListItem { metric_quantity: 0.7,
+/// metric_unit: "kg", imperial_quantity: Some(23.0), imperial_unit: Some("oz") }`
 fn to_display_item(name: String, base_unit: &str, base_qty: f32) -> ShoppingListItem {
     match base_unit {
         "g" => {
@@ -253,19 +285,43 @@ fn to_display_item(name: String, base_unit: &str, base_qty: f32) -> ShoppingList
 
 /// Ceils `value` to the nearest multiple of `step`.
 ///
-/// The result is always ≥ `value` (i.e. never rounded down).
+/// The result is always ≥ `value` (i.e. never rounded down). Exact multiples
+/// are returned unchanged.
+///
+/// Used by [`to_display_item`] to produce human-friendly shopping quantities
+/// (e.g. "buy 70 g" rather than "buy 61 g").
+///
+/// # Examples
+///
+/// - `ceil_to(61.0, 10.0)` → `70.0`
+/// - `ceil_to(70.0, 10.0)` → `70.0` (exact multiple, unchanged)
+/// - `ceil_to(650.0, 100.0)` → `700.0`
 fn ceil_to(value: f32, step: f32) -> f32 {
     (value / step).ceil() * step
 }
 
-/// Maps a unit string to its canonical form and scales the quantity accordingly.
+/// Maps a unit string to its canonical base unit and scales the quantity accordingly.
 ///
 /// All weight units normalise to `"g"`; all volume units normalise to `"ml"`.
-/// Unrecognised units are returned unchanged so ingredients with exotic or
-/// count-based units (e.g. "clove", "piece") still aggregate by exact match.
+/// Matching is case-insensitive. Unrecognised units (including empty string and
+/// count-based labels like `"clove"` or `"piece"`) are returned unchanged so
+/// they still aggregate correctly by exact string match.
+///
+/// **Conversion factors used:**
+/// - `kg` → g: × 1 000
+/// - `oz` / `ounce` → g: × 28.3495
+/// - `lb` / `lbs` / `pound` → g: × 453.592
+/// - `l` / `liter` / `litre` → ml: × 1 000
+/// - `tsp` / `teaspoon` → ml: × 4.92892
+/// - `tbsp` / `tablespoon` → ml: × 14.7868
+/// - `cup` / `cups` → ml: × 236.588
 ///
 /// Returns a `Cow` so known units borrow a `'static` literal (no allocation);
 /// only the passthrough branch borrows the caller's input slice.
+///
+/// # Example
+///
+/// `normalise_unit("kg", 0.5)` → `(Cow::Borrowed("g"), 500.0)`
 fn normalise_unit<'a>(unit: &'a str, quantity: f32) -> (Cow<'a, str>, f32) {
     match unit.to_lowercase().as_str() {
         // Weight → g
@@ -888,5 +944,115 @@ mod tests {
 
         let (u, q) = normalise_unit("", 1.0);
         assert_eq!(u, ""); assert!((q - 1.0).abs() < 0.001);
+    }
+
+    // -------------------------------------------------------------------------
+    // Quota isolation and release tests
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_quota_per_user_isolation() {
+        let pool = setup().await;
+        // Insert a second user and a recipe they own.
+        sqlx::query("INSERT INTO users (id, username, password_hash) VALUES (2, 'user2', 'placeholder')")
+            .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (2, 2, 'User2 Recipe', '[]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+
+        // Fill user 1's quota (MAX_MEAL_PLAN_ENTRIES = 3 in test mode).
+        let slots = [MealSlot::Breakfast, MealSlot::Lunch, MealSlot::Dinner];
+        let base = NaiveDate::from_ymd_opt(2031, 1, 1).unwrap();
+        for i in 0..MAX_MEAL_PLAN_ENTRIES {
+            let date = base + chrono::Duration::days((i / slots.len()) as i64);
+            let slot = slots[i % slots.len()].clone();
+            plan_meal(&pool, 1, date, slot, 1, 1).await
+                .expect("user1 should succeed within quota");
+        }
+        // Confirm user 1 is at quota.
+        assert!(plan_meal(&pool, 1, base + chrono::Duration::days(99), MealSlot::Breakfast, 1, 1).await.is_err());
+
+        // User 2's quota is independent — they must still be able to plan.
+        let result = plan_meal(&pool, 2, base, MealSlot::Breakfast, 2, 1).await;
+        assert!(result.is_ok(), "User 2 must not be blocked by User 1's quota");
+    }
+
+    #[tokio::test]
+    async fn test_quota_release_after_delete() {
+        let pool = setup().await;
+        let base = NaiveDate::from_ymd_opt(2032, 1, 1).unwrap();
+        let slots = [MealSlot::Breakfast, MealSlot::Lunch, MealSlot::Dinner];
+
+        // Fill quota (3 in test mode).
+        for i in 0..MAX_MEAL_PLAN_ENTRIES {
+            let date = base + chrono::Duration::days((i / slots.len()) as i64);
+            let slot = slots[i % slots.len()].clone();
+            plan_meal(&pool, 1, date, slot, 1, 1).await
+                .expect("should succeed within quota");
+        }
+        // Adding one more should fail.
+        assert!(plan_meal(&pool, 1, base + chrono::Duration::days(99), MealSlot::Breakfast, 1, 1).await.is_err());
+
+        // Delete one entry to free a slot.
+        let meals = get_meals_in_range(
+            &pool, 1,
+            NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(9999, 12, 31).unwrap(),
+        ).await.unwrap();
+        let entry_id = meals[0].id.unwrap();
+        remove_planned_meal(&pool, 1, entry_id).await.expect("delete should succeed");
+
+        // Now adding one more must succeed.
+        let result = plan_meal(&pool, 1, base + chrono::Duration::days(99), MealSlot::Breakfast, 1, 1).await;
+        assert!(result.is_ok(), "Adding after deleting one entry should succeed");
+    }
+
+    // -------------------------------------------------------------------------
+    // Shopping list edge case tests
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_shopping_list_sub_one_gram() {
+        let pool = setup().await;
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (2, 1, 'Tiny', '[{\"name\":\"Spice\",\"quantity\":0.5,\"unit\":\"g\"}]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+
+        let date = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        plan_meal(&pool, 1, date, MealSlot::Lunch, 2, 1).await.unwrap();
+        let list = get_shopping_list(&pool, 1, date, date).await.unwrap();
+        let spice = list.iter().find(|i| i.name == "spice").unwrap();
+        // 0.5 g < 100 g → ceil_to(0.5, 10) = 10 g
+        assert_eq!(spice.metric_unit, "g");
+        assert!((spice.metric_quantity - 10.0).abs() < 0.001, "0.5 g should ceil to 10 g");
+        // imperial: ceil(0.5 × 0.035274) = ceil(0.01764) = 1 oz
+        assert_eq!(spice.imperial_quantity, Some(1.0));
+        assert_eq!(spice.imperial_unit, Some("oz".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_shopping_list_exact_threshold_boundary() {
+        let pool = setup().await;
+        // Exactly 100 g → must go to the kg branch (threshold is `< 100.0`).
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (2, 1, 'Exact', '[{\"name\":\"Boundary\",\"quantity\":100.0,\"unit\":\"g\"}]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+
+        let date = NaiveDate::from_ymd_opt(2026, 6, 2).unwrap();
+        plan_meal(&pool, 1, date, MealSlot::Lunch, 2, 1).await.unwrap();
+        let list = get_shopping_list(&pool, 1, date, date).await.unwrap();
+        let item = list.iter().find(|i| i.name == "boundary").unwrap();
+        // 100 g ≥ 100 → ceil_to(100, 100) / 1000 = 0.1 kg
+        assert_eq!(item.metric_unit, "kg", "Exactly 100 g must use the kg branch");
+        assert!((item.metric_quantity - 0.1).abs() < 0.001);
+        // imperial: ceil(100 × 0.035274) = ceil(3.5274) = 4 oz
+        assert_eq!(item.imperial_quantity, Some(4.0));
+        assert_eq!(item.imperial_unit, Some("oz".to_string()));
     }
 }

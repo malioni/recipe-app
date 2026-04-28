@@ -26,6 +26,19 @@ pub async fn get_user_by_username(pool: &SqlitePool, username: &str) -> Result<O
     storage::load_user_by_username(pool, username).await
 }
 
+/// Returns the public profile of a single user by their primary key.
+///
+/// Returns `None` if no user exists with that ID. The returned [`UserInfo`]
+/// never includes the password hash — it is safe to serialize directly into
+/// an API response.
+///
+/// # Errors
+///
+/// Returns `Err` if the query fails.
+pub async fn get_user_info_by_id(pool: &SqlitePool, user_id: i64) -> Result<Option<UserInfo>, String> {
+    storage::load_user_info_by_id(pool, user_id).await
+}
+
 // ---------------------------------------------------------------------------
 // Recipes
 // ---------------------------------------------------------------------------
@@ -548,5 +561,20 @@ mod tests {
         let ingredients = vec![Ingredient { name: "Flour".to_string(), quantity: 1.0, unit: "u".repeat(32) }];
         let r = Recipe { id: 0, name: "Boundary Unit".to_string(), source_url: None, ingredients, instructions: vec![] };
         assert!(add_recipe(&pool, 1, r).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_user_info_by_id_found() {
+        let pool = setup().await;
+        let result = get_user_info_by_id(&pool, 1).await.unwrap();
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().username, "test");
+    }
+
+    #[tokio::test]
+    async fn test_get_user_info_by_id_not_found() {
+        let pool = setup().await;
+        let result = get_user_info_by_id(&pool, 999_999).await.unwrap();
+        assert!(result.is_none());
     }
 }

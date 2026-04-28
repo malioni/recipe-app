@@ -1120,3 +1120,245 @@ async fn test_profile_me_returns_is_admin_false() {
     assert_eq!(me["is_admin"], false, "Non-admin user must have is_admin: false");
     assert_eq!(me["username"], "regularuser");
 }
+
+// ---------------------------------------------------------------------------
+// Cross-user isolation tests — meal plan and cooked log (TEST-3)
+// ---------------------------------------------------------------------------
+
+/// User A plans a meal; User B's calendar must be empty.
+#[tokio::test]
+async fn test_user_isolation_meal_plan() {
+    let (app, pool) = build_test_app().await;
+    let admin_cookie = login(&app).await;
+
+    // Admin creates a recipe and plans it.
+    app.clone()
+        .oneshot(json_req("POST", "/recipes", &admin_cookie, serde_json::json!({
+            "name": "Admin Meal", "source_url": null, "ingredients": [], "instructions": []
+        })))
+        .await.unwrap();
+    let body = app.clone().oneshot(get_req("/recipes", &admin_cookie)).await.unwrap()
+        .into_body().collect().await.unwrap().to_bytes();
+    let recipes: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    let recipe_id = recipes[0]["id"].as_i64().unwrap();
+
+    app.clone()
+        .oneshot(json_req("POST", "/calendar/entries", &admin_cookie, serde_json::json!({
+            "date": "2026-11-01", "slot": "lunch", "recipe_id": recipe_id
+        })))
+        .await.unwrap();
+
+    // Create user2 and log in.
+    let hash = auth::hash_password("password2").unwrap();
+    storage::create_user(&pool, "user2", &hash).await.unwrap();
+    let login_req = Request::builder()
+        .method("POST").uri("/login")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from("username=user2&password=password2")).unwrap();
+    let user2_cookie = app.clone().oneshot(login_req).await.unwrap()
+        .headers().get("set-cookie").unwrap()
+        .to_str().unwrap().split(';').next().unwrap().to_string();
+
+    // User 2 must see no meal plan entries.
+    let response = app.clone()
+        .oneshot(get_req("/calendar/entries?start=2026-11-01&end=2026-11-01", &user2_cookie))
+        .await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let entries: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert!(entries.is_empty(), "User 2 must not see User 1's meal plan entries");
+}
+
+/// User A marks a recipe cooked; User B's cooked log must be empty.
+#[tokio::test]
+async fn test_user_isolation_cooked_log() {
+    let (app, pool) = build_test_app().await;
+    let admin_cookie = login(&app).await;
+
+    // Admin creates a recipe and marks it cooked.
+    app.clone()
+        .oneshot(json_req("POST", "/recipes", &admin_cookie, serde_json::json!({
+            "name": "Admin Cooked", "source_url": null, "ingredients": [], "instructions": []
+        })))
+        .await.unwrap();
+    let body = app.clone().oneshot(get_req("/recipes", &admin_cookie)).await.unwrap()
+        .into_body().collect().await.unwrap().to_bytes();
+    let recipes: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    let recipe_id = recipes[0]["id"].as_i64().unwrap();
+
+    app.clone()
+        .oneshot(json_req("POST", "/calendar/cooked", &admin_cookie, serde_json::json!({
+            "date": "2026-11-02", "recipe_id": recipe_id
+        })))
+        .await.unwrap();
+
+    // Create user2 and log in.
+    let hash = auth::hash_password("password2").unwrap();
+    storage::create_user(&pool, "user2", &hash).await.unwrap();
+    let login_req = Request::builder()
+        .method("POST").uri("/login")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from("username=user2&password=password2")).unwrap();
+    let user2_cookie = app.clone().oneshot(login_req).await.unwrap()
+        .headers().get("set-cookie").unwrap()
+        .to_str().unwrap().split(';').next().unwrap().to_string();
+
+    // User 2 must see no cooked log entries.
+    let response = app.clone()
+        .oneshot(get_req("/calendar/cooked?start=2026-11-02&end=2026-11-02", &user2_cookie))
+        .await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let entries: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert!(entries.is_empty(), "User 2 must not see User 1's cooked log entries");
+}
+
+// ---------------------------------------------------------------------------
+// Admin cascade delete at API level (TEST-4)
+// ---------------------------------------------------------------------------
+
+/// Deleting a user via the admin API removes their recipes and meal plan
+/// entries via ON DELETE CASCADE.
+#[tokio::test]
+async fn test_admin_delete_user_cascades_data_api() {
+    let (app, pool) = build_test_app().await;
+    let admin_cookie = login(&app).await;
+
+    // Create user2 and note their ID.
+    let hash = auth::hash_password("password2").unwrap();
+    let user2_id = storage::create_user(&pool, "user2", &hash).await.unwrap();
+
+    // Log in as user2.
+    let login_req = Request::builder()
+        .method("POST").uri("/login")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from("username=user2&password=password2")).unwrap();
+    let user2_cookie = app.clone().oneshot(login_req).await.unwrap()
+        .headers().get("set-cookie").unwrap()
+        .to_str().unwrap().split(';').next().unwrap().to_string();
+
+    // User2 creates a recipe and plans a meal.
+    app.clone()
+        .oneshot(json_req("POST", "/recipes", &user2_cookie, serde_json::json!({
+            "name": "User2 Recipe", "source_url": null, "ingredients": [], "instructions": []
+        })))
+        .await.unwrap();
+    let body = app.clone().oneshot(get_req("/recipes", &user2_cookie)).await.unwrap()
+        .into_body().collect().await.unwrap().to_bytes();
+    let recipes: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    let recipe_id = recipes[0]["id"].as_i64().unwrap();
+
+    app.clone()
+        .oneshot(json_req("POST", "/calendar/entries", &user2_cookie, serde_json::json!({
+            "date": "2026-12-01", "slot": "dinner", "recipe_id": recipe_id
+        })))
+        .await.unwrap();
+
+    // Admin deletes user2.
+    let res = app.clone()
+        .oneshot(delete_req(&format!("/admin/users/{}", user2_id), &admin_cookie))
+        .await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Verify via API: user2's session still has their user_id, but their data
+    // was cascade-deleted so both endpoints return empty collections.
+    let body = app.clone()
+        .oneshot(get_req("/recipes", &user2_cookie))
+        .await.unwrap()
+        .into_body().collect().await.unwrap().to_bytes();
+    let recipes: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert!(recipes.is_empty(), "User2's recipes must be cascade-deleted");
+
+    let body = app.clone()
+        .oneshot(get_req("/calendar/entries?start=2026-12-01&end=2026-12-01", &user2_cookie))
+        .await.unwrap()
+        .into_body().collect().await.unwrap().to_bytes();
+    let entries: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert!(entries.is_empty(), "User2's meal plan entries must be cascade-deleted");
+}
+
+// ---------------------------------------------------------------------------
+// Meal plan portions API-level tests (TEST-7)
+// ---------------------------------------------------------------------------
+
+/// POST /calendar/entries with portions=0 returns 400.
+#[tokio::test]
+async fn test_plan_meal_portions_zero_rejected_api() {
+    let (app, _pool) = build_test_app().await;
+    let cookie = login(&app).await;
+
+    app.clone()
+        .oneshot(json_req("POST", "/recipes", &cookie, serde_json::json!({
+            "name": "Portions Zero", "source_url": null, "ingredients": [], "instructions": []
+        })))
+        .await.unwrap();
+    let body = app.clone().oneshot(get_req("/recipes", &cookie)).await.unwrap()
+        .into_body().collect().await.unwrap().to_bytes();
+    let recipes: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    let recipe_id = recipes[0]["id"].as_i64().unwrap();
+
+    let res = app.clone()
+        .oneshot(json_req("POST", "/calendar/entries", &cookie, serde_json::json!({
+            "date": "2026-12-10", "slot": "lunch", "recipe_id": recipe_id, "portions": 0
+        })))
+        .await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST, "portions=0 must be rejected with 400");
+}
+
+/// POST /calendar/entries with portions=-1 returns 400.
+#[tokio::test]
+async fn test_plan_meal_portions_negative_rejected_api() {
+    let (app, _pool) = build_test_app().await;
+    let cookie = login(&app).await;
+
+    app.clone()
+        .oneshot(json_req("POST", "/recipes", &cookie, serde_json::json!({
+            "name": "Portions Negative", "source_url": null, "ingredients": [], "instructions": []
+        })))
+        .await.unwrap();
+    let body = app.clone().oneshot(get_req("/recipes", &cookie)).await.unwrap()
+        .into_body().collect().await.unwrap().to_bytes();
+    let recipes: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    let recipe_id = recipes[0]["id"].as_i64().unwrap();
+
+    let res = app.clone()
+        .oneshot(json_req("POST", "/calendar/entries", &cookie, serde_json::json!({
+            "date": "2026-12-11", "slot": "dinner", "recipe_id": recipe_id, "portions": -1
+        })))
+        .await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST, "portions=-1 must be rejected with 400");
+}
+
+/// POST /calendar/entries without a portions field defaults to 1.
+#[tokio::test]
+async fn test_plan_meal_portions_default_api() {
+    let (app, _pool) = build_test_app().await;
+    let cookie = login(&app).await;
+
+    app.clone()
+        .oneshot(json_req("POST", "/recipes", &cookie, serde_json::json!({
+            "name": "Default Portions", "source_url": null, "ingredients": [], "instructions": []
+        })))
+        .await.unwrap();
+    let body = app.clone().oneshot(get_req("/recipes", &cookie)).await.unwrap()
+        .into_body().collect().await.unwrap().to_bytes();
+    let recipes: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    let recipe_id = recipes[0]["id"].as_i64().unwrap();
+
+    // POST without a portions field.
+    let res = app.clone()
+        .oneshot(json_req("POST", "/calendar/entries", &cookie, serde_json::json!({
+            "date": "2026-12-12", "slot": "breakfast", "recipe_id": recipe_id
+        })))
+        .await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    // Retrieve the entry and verify portions == 1.
+    let body = app.clone()
+        .oneshot(get_req("/calendar/entries?start=2026-12-12&end=2026-12-12", &cookie))
+        .await.unwrap()
+        .into_body().collect().await.unwrap().to_bytes();
+    let entries: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["portions"], 1, "Omitted portions must default to 1");
+}

@@ -1,4 +1,6 @@
--- Recreate meal_plan without the UNIQUE(user_id, date, slot) constraint.
+-- Allow multiple recipes per meal slot (e.g. a main dish plus sides).
+-- The original UNIQUE(user_id, date, slot) constraint prevented users from
+-- planning more than one recipe for the same meal, which was too restrictive.
 -- SQLite cannot ALTER TABLE to drop a constraint, so the table must be
 -- rebuilt. Existing data is preserved.
 ALTER TABLE meal_plan RENAME TO meal_plan_old;
