@@ -366,6 +366,23 @@ pub async fn ensure_migrations_table(pool: &SqlitePool) -> Result<(), String> {
     Ok(())
 }
 
+/// Executes a raw migration SQL string against the database.
+///
+/// Called by the startup migration runner after `is_migration_applied` confirms
+/// the version has not yet been applied. Keeping execution here ensures that
+/// all SQL — including DDL run at startup — stays within the storage layer.
+///
+/// # Errors
+///
+/// Returns `Err` if the query fails.
+pub async fn apply_migration(pool: &SqlitePool, sql: &str) -> Result<(), String> {
+    sqlx::query(sql)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to execute migration SQL: {e}"))?;
+    Ok(())
+}
+
 /// Returns `true` if the given migration version has already been recorded in
 /// `_schema_migrations`.
 ///
@@ -760,5 +777,23 @@ mod tests {
         let pool = setup().await;
         let result = load_user_info_by_id(&pool, 999_999).await.unwrap();
         assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_apply_migration_executes_sql() {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        ensure_migrations_table(&pool).await.unwrap();
+        let sql = "CREATE TABLE IF NOT EXISTS _test_tbl (id INTEGER PRIMARY KEY)";
+        apply_migration(&pool, sql).await.expect("first call should succeed");
+        // Same idempotent SQL should succeed again — apply_migration does not
+        // check the tracking table; the caller is responsible for that.
+        apply_migration(&pool, sql).await.expect("second call with idempotent SQL should succeed");
+    }
+
+    #[tokio::test]
+    async fn test_apply_migration_invalid_sql_returns_err() {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        let result = apply_migration(&pool, "THIS IS NOT VALID SQL").await;
+        assert!(result.is_err(), "invalid SQL should return Err");
     }
 }

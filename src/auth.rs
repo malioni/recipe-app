@@ -90,12 +90,14 @@ pub struct AuthRedirect;
 pub struct AuthForbidden;
 
 impl IntoResponse for AuthRedirect {
+    /// Converts an authentication failure into a `302` redirect to `/login`.
     fn into_response(self) -> Response {
         Redirect::to("/login").into_response()
     }
 }
 
 impl IntoResponse for AuthForbidden {
+    /// Converts an admin-privilege failure into a `403 Forbidden` plain-text response.
     fn into_response(self) -> Response {
         (StatusCode::FORBIDDEN, "Forbidden").into_response()
     }

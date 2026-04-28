@@ -188,17 +188,17 @@ async fn main() {
 
 /// Runs a migration SQL string if it has not already been applied.
 ///
-/// Delegates the tracking-table checks to `storage` so that all SQL stays
-/// within the storage layer. This makes every migration idempotent at the
-/// application level regardless of whether the SQL itself is idempotent.
+/// Delegates all SQL — including the migration execution itself — to `storage`
+/// so that no SQL lives outside the storage layer. This makes every migration
+/// idempotent at the application level regardless of whether the SQL itself is
+/// idempotent.
 async fn run_migration(pool: &sqlx::SqlitePool, version: &str, sql: &str) {
     let already_applied = storage::is_migration_applied(pool, version)
         .await
         .unwrap_or_else(|e| panic!("Failed to check migration {version}: {e}"));
 
     if !already_applied {
-        sqlx::query(sql)
-            .execute(pool)
+        storage::apply_migration(pool, sql)
             .await
             .unwrap_or_else(|e| panic!("Failed to run migration {version}: {e}"));
 
