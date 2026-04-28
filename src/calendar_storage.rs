@@ -13,9 +13,24 @@ use crate::model::{CookedEntry, MealEntry, MealSlot};
 
 /// Loads all planned meals for a user whose date falls within `[start, end]` (inclusive).
 ///
+/// Results are ordered by date, then by slot (alphabetical on the stored string).
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the ID of the authenticated user; only their entries are returned.
+/// - `start` — the first date of the range to query (inclusive).
+/// - `end` — the last date of the range to query (inclusive).
+///
+/// # Returns
+///
+/// `Ok(entries)` with all matching meal plan entries. Returns an empty `Vec`
+/// if no entries fall in the range.
+///
 /// # Errors
 ///
-/// Returns `Err` if the query fails.
+/// Returns `Err` if the query fails or if a stored date or slot string cannot
+/// be parsed.
 pub async fn load_meal_entries_in_range(
     pool: &SqlitePool,
     user_id: i64,
@@ -50,9 +65,21 @@ pub async fn load_meal_entries_in_range(
 /// Multiple entries per slot are allowed; the caller is responsible for
 /// enforcing any per-slot limits before calling this function.
 ///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the ID of the authenticated user who owns the entry.
+/// - `entry` — the meal entry to insert; `entry.id` is ignored (SQLite assigns
+///   the real ID via `AUTOINCREMENT`).
+///
+/// # Returns
+///
+/// `Ok(())` on success.
+///
 /// # Errors
 ///
-/// Returns `Err` if the query fails.
+/// Returns `Err` if the query fails (e.g. a foreign key constraint violation
+/// because `entry.recipe_id` does not exist).
 pub async fn add_meal_entry(pool: &SqlitePool, user_id: i64, entry: &MealEntry) -> Result<(), String> {
     let date_str = entry.date.to_string();
     let slot_str = entry.slot.to_string();
@@ -70,7 +97,18 @@ pub async fn add_meal_entry(pool: &SqlitePool, user_id: i64, entry: &MealEntry) 
 
 /// Removes a planned meal entry by its primary key, scoped to the owning user.
 ///
-/// Deleting a non-existent id, or an id owned by a different user, is a no-op — idempotent by design.
+/// Deleting a non-existent id, or an id owned by a different user, is a
+/// no-op — idempotent by design.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the ID of the authenticated user; only their entries can be deleted.
+/// - `id` — the primary key of the meal plan entry to delete.
+///
+/// # Returns
+///
+/// `Ok(())` on success, including when no row matched `id` and `user_id`.
 ///
 /// # Errors
 ///
@@ -89,7 +127,19 @@ pub async fn delete_meal_entry(pool: &SqlitePool, user_id: i64, id: i64) -> Resu
 
 /// Returns the number of planned meal entries for the given user, date, and slot.
 ///
-/// Used by the manager layer to enforce the per-slot entry limit.
+/// Used by the manager layer to enforce the per-slot entry limit before
+/// inserting a new entry. Uses `COUNT(*)` so no rows are loaded into memory.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the ID of the authenticated user.
+/// - `date` — the specific day to count entries for.
+/// - `slot` — the meal slot (`Breakfast`, `Lunch`, or `Dinner`) to count.
+///
+/// # Returns
+///
+/// `Ok(n)` where `n` is the number of entries for `(user_id, date, slot)`.
 ///
 /// # Errors
 ///
@@ -114,15 +164,61 @@ pub(crate) async fn count_slot_entries(
     Ok(row.count as usize)
 }
 
+/// Returns the total number of planned meal entries for the given user across
+/// all dates and slots.
+///
+/// Used by the manager layer to enforce the per-user meal plan quota before
+/// inserting a new entry. Uses `COUNT(*)` so no rows are loaded into memory,
+/// making it efficient even when a user has many entries.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the ID of the authenticated user whose entries are counted.
+///
+/// # Returns
+///
+/// `Ok(n)` where `n` is the total number of meal plan entries owned by
+/// `user_id`.
+///
+/// # Errors
+///
+/// Returns `Err` if the query fails.
+pub(crate) async fn count_all_meal_entries(pool: &SqlitePool, user_id: i64) -> Result<usize, String> {
+    let row = sqlx::query!(
+        "SELECT COUNT(*) as count FROM meal_plan WHERE user_id = ?",
+        user_id
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("Failed to count meal entries: {e}"))?;
+
+    Ok(row.count as usize)
+}
+
 // ---------------------------------------------------------------------------
 // Cooked log
 // ---------------------------------------------------------------------------
 
 /// Loads all cooked entries for a user whose date falls within `[start, end]` (inclusive).
 ///
+/// Results are ordered by date ascending.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the ID of the authenticated user; only their entries are returned.
+/// - `start` — the first date of the range to query (inclusive).
+/// - `end` — the last date of the range to query (inclusive).
+///
+/// # Returns
+///
+/// `Ok(entries)` with all matching cooked log entries. Returns an empty `Vec`
+/// if no entries fall in the range.
+///
 /// # Errors
 ///
-/// Returns `Err` if the query fails.
+/// Returns `Err` if the query fails or a stored date string cannot be parsed.
 pub async fn load_cooked_entries_in_range(
     pool: &SqlitePool,
     user_id: i64,
@@ -154,11 +250,24 @@ pub async fn load_cooked_entries_in_range(
 /// Records a recipe as cooked on the given date for the given user.
 ///
 /// Duplicate entries (same user, date, recipe) are silently ignored via
-/// INSERT OR IGNORE and the UNIQUE constraint.
+/// `INSERT OR IGNORE` and the `UNIQUE(user_id, date, recipe_id)` constraint.
+/// Callers need not check for duplicates before calling.
+///
+/// # Parameters
+///
+/// - `pool` — the SQLite connection pool.
+/// - `user_id` — the ID of the authenticated user who cooked the recipe.
+/// - `entry` — the cooked log entry specifying which recipe was cooked and when.
+///
+/// # Returns
+///
+/// `Ok(())` on success, including when an identical entry already exists
+/// (duplicate is silently ignored).
 ///
 /// # Errors
 ///
-/// Returns `Err` if the query fails.
+/// Returns `Err` if the query fails for a reason other than a duplicate
+/// (e.g. a foreign key violation because `entry.recipe_id` does not exist).
 pub async fn add_cooked_entry(pool: &SqlitePool, user_id: i64, entry: &CookedEntry) -> Result<(), String> {
     let date_str = entry.date.to_string();
 
@@ -366,5 +475,73 @@ mod tests {
         ).await.unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].date, in_range.date);
+    }
+
+    // -------------------------------------------------------------------------
+    // count_all_meal_entries
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_count_all_meal_entries_empty() {
+        let pool = setup().await;
+        let count = count_all_meal_entries(&pool, 1).await.unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_count_all_meal_entries_one() {
+        let pool = setup().await;
+        let entry = MealEntry {
+            id: None,
+            date: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            slot: MealSlot::Lunch,
+            recipe_id: 1,
+            portions: 1,
+        };
+        add_meal_entry(&pool, 1, &entry).await.unwrap();
+        let count = count_all_meal_entries(&pool, 1).await.unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_count_all_meal_entries_multiple() {
+        let pool = setup().await;
+        let date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        add_meal_entry(&pool, 1, &MealEntry { id: None, date, slot: MealSlot::Breakfast, recipe_id: 1, portions: 1 }).await.unwrap();
+        add_meal_entry(&pool, 1, &MealEntry { id: None, date, slot: MealSlot::Lunch, recipe_id: 1, portions: 1 }).await.unwrap();
+        add_meal_entry(&pool, 1, &MealEntry { id: None, date, slot: MealSlot::Dinner, recipe_id: 1, portions: 1 }).await.unwrap();
+        let count = count_all_meal_entries(&pool, 1).await.unwrap();
+        assert_eq!(count, 3);
+    }
+
+    // -------------------------------------------------------------------------
+    // count_slot_entries
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_count_slot_entries_empty() {
+        let pool = setup().await;
+        let date = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        let count = count_slot_entries(&pool, 1, date, &MealSlot::Lunch).await.unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_count_slot_entries_one() {
+        let pool = setup().await;
+        let date = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        add_meal_entry(&pool, 1, &MealEntry { id: None, date, slot: MealSlot::Lunch, recipe_id: 1, portions: 1 }).await.unwrap();
+        let count = count_slot_entries(&pool, 1, date, &MealSlot::Lunch).await.unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_count_slot_entries_different_slot_not_counted() {
+        let pool = setup().await;
+        let date = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        add_meal_entry(&pool, 1, &MealEntry { id: None, date, slot: MealSlot::Breakfast, recipe_id: 1, portions: 1 }).await.unwrap();
+        // Lunch slot should still be 0
+        let count = count_slot_entries(&pool, 1, date, &MealSlot::Lunch).await.unwrap();
+        assert_eq!(count, 0);
     }
 }
