@@ -544,4 +544,39 @@ mod tests {
         let count = count_slot_entries(&pool, 1, date, &MealSlot::Lunch).await.unwrap();
         assert_eq!(count, 0);
     }
+
+    #[tokio::test]
+    async fn test_count_all_meal_entries_user_isolation() {
+        let pool = setup().await;
+        sqlx::query("INSERT INTO users (id, username, password_hash) VALUES (2, 'user2', 'placeholder')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO recipes (id, user_id, name, ingredients, instructions) VALUES (2, 2, 'User2 Recipe', '[]', '[]')")
+            .execute(&pool).await.unwrap();
+
+        let date = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        // User 2 adds two entries
+        add_meal_entry(&pool, 2, &MealEntry { id: None, date, slot: MealSlot::Lunch, recipe_id: 2, portions: 1 }).await.unwrap();
+        add_meal_entry(&pool, 2, &MealEntry { id: None, date, slot: MealSlot::Dinner, recipe_id: 2, portions: 1 }).await.unwrap();
+
+        // User 1 should still see 0 entries
+        let count = count_all_meal_entries(&pool, 1).await.unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_count_slot_entries_user_isolation() {
+        let pool = setup().await;
+        sqlx::query("INSERT INTO users (id, username, password_hash) VALUES (2, 'user2', 'placeholder')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO recipes (id, user_id, name, ingredients, instructions) VALUES (2, 2, 'User2 Recipe', '[]', '[]')")
+            .execute(&pool).await.unwrap();
+
+        let date = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        // User 2 adds an entry in the Lunch slot
+        add_meal_entry(&pool, 2, &MealEntry { id: None, date, slot: MealSlot::Lunch, recipe_id: 2, portions: 1 }).await.unwrap();
+
+        // User 1's Lunch slot should still be 0
+        let count = count_slot_entries(&pool, 1, date, &MealSlot::Lunch).await.unwrap();
+        assert_eq!(count, 0);
+    }
 }

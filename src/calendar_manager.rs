@@ -108,8 +108,8 @@ pub async fn plan_meal(
     }
 
     // Verify the recipe exists and belongs to this user before linking it.
-    storage::load_recipe(pool, user_id, recipe_id).await
-        .map_err(|_| format!("Recipe with ID {} not found", recipe_id))?;
+    storage::load_recipe(pool, user_id, recipe_id).await?
+        .ok_or_else(|| format!("Recipe with ID {} not found", recipe_id))?;
 
     // Enforce per-user meal plan quota using a COUNT(*) query — no rows loaded.
     let total = calendar_storage::count_all_meal_entries(pool, user_id).await?;
@@ -180,8 +180,8 @@ pub async fn mark_as_cooked(
     date: NaiveDate,
     recipe_id: i64,
 ) -> Result<(), String> {
-    storage::load_recipe(pool, user_id, recipe_id).await
-        .map_err(|_| format!("Recipe with ID {} not found", recipe_id))?;
+    storage::load_recipe(pool, user_id, recipe_id).await?
+        .ok_or_else(|| format!("Recipe with ID {} not found", recipe_id))?;
 
     let entry = CookedEntry { date, recipe_id };
     calendar_storage::add_cooked_entry(pool, user_id, &entry).await
@@ -269,8 +269,8 @@ pub async fn get_shopping_list(
     let mut aggregated: Vec<Ingredient> = Vec::new();
 
     for entry in entries {
-        let recipe = storage::load_recipe(pool, user_id, entry.recipe_id).await
-            .map_err(|_| format!("Recipe with ID {} not found", entry.recipe_id))?;
+        let recipe = storage::load_recipe(pool, user_id, entry.recipe_id).await?
+            .ok_or_else(|| format!("Recipe with ID {} not found", entry.recipe_id))?;
 
         let scale = entry.portions as f32;
         for ingredient in recipe.ingredients {

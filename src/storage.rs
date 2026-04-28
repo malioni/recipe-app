@@ -304,8 +304,9 @@ pub async fn any_users_exist(pool: &SqlitePool) -> Result<bool, String> {
 /// Loads a single recipe by its ID, scoped to the owning user.
 ///
 /// The `user_id` filter ensures a user cannot read another user's recipes even
-/// if they guess the numeric ID. Returns `Err` if the recipe does not exist or
-/// belongs to a different user.
+/// if they guess the numeric ID. Returns `Ok(None)` when the recipe does not
+/// exist or belongs to a different user, distinguishing that case from a
+/// genuine database error.
 ///
 /// # Parameters
 ///
@@ -315,14 +316,13 @@ pub async fn any_users_exist(pool: &SqlitePool) -> Result<bool, String> {
 ///
 /// # Returns
 ///
-/// `Ok(recipe)` if a row matching both `id` and `user_id` is found.
+/// `Ok(Some(recipe))` if a row matching both `id` and `user_id` is found;
+/// `Ok(None)` if no recipe matches (not found or belongs to another user).
 ///
 /// # Errors
 ///
-/// Returns `Err` if the query fails or if no recipe matches both `id` and
-/// `user_id` (including the case where the recipe exists but belongs to
-/// a different user).
-pub async fn load_recipe(pool: &SqlitePool, user_id: i64, id: i64) -> Result<Recipe, String> {
+/// Returns `Err` if the query or JSON deserialisation fails.
+pub async fn load_recipe(pool: &SqlitePool, user_id: i64, id: i64) -> Result<Option<Recipe>, String> {
     let row = sqlx::query!(
         "SELECT id, name, source_url, ingredients, instructions FROM recipes WHERE id = ? AND user_id = ?",
         id,
@@ -330,16 +330,18 @@ pub async fn load_recipe(pool: &SqlitePool, user_id: i64, id: i64) -> Result<Rec
     )
     .fetch_optional(pool)
     .await
-    .map_err(|e| format!("Failed to query recipe: {e}"))?
-    .ok_or_else(|| format!("Recipe with ID {} not found", id))?;
+    .map_err(|e| format!("Failed to query recipe: {e}"))?;
 
-    Ok(Recipe {
-        id: row.id,
-        name: row.name,
-        source_url: row.source_url,
-        ingredients: parse_ingredients(&row.ingredients)?,
-        instructions: parse_instructions(&row.instructions)?,
+    row.map(|r| {
+        Ok(Recipe {
+            id: r.id,
+            name: r.name,
+            source_url: r.source_url,
+            ingredients: parse_ingredients(&r.ingredients)?,
+            instructions: parse_instructions(&r.instructions)?,
+        })
     })
+    .transpose()
 }
 
 /// Loads every recipe from storage for the given user, ordered by ID.
@@ -702,7 +704,7 @@ mod tests {
             instructions: vec!["Boil water".to_string()],
         };
         let id = add_recipe(&pool, 1, &recipe).await.expect("Failed to add recipe");
-        let loaded = load_recipe(&pool, 1, id).await.expect("Failed to load recipe");
+        let loaded = load_recipe(&pool, 1, id).await.unwrap().expect("Expected recipe to exist");
         assert_eq!(loaded.name, "Pasta");
         assert_eq!(loaded.instructions, vec!["Boil water"]);
     }
@@ -711,7 +713,7 @@ mod tests {
     async fn test_load_recipe_invalid_id() {
         let pool = setup().await;
         let result = load_recipe(&pool, 1, 999_999).await;
-        assert!(result.is_err(), "Expected an error for a missing ID");
+        assert!(result.unwrap().is_none(), "Expected None for a missing ID");
     }
 
     #[tokio::test]
@@ -739,7 +741,7 @@ mod tests {
         };
         let id = add_recipe(&pool, 1, &recipe).await.expect("Failed to add recipe");
         delete_recipe(&pool, 1, id).await.expect("Failed to delete recipe");
-        assert!(load_recipe(&pool, 1, id).await.is_err());
+        assert!(load_recipe(&pool, 1, id).await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -758,7 +760,7 @@ mod tests {
             instructions: vec![],
         };
         save_recipe(&pool, 1, id, &updated).await.expect("Failed to update recipe");
-        let loaded = load_recipe(&pool, 1, id).await.expect("Failed to load recipe");
+        let loaded = load_recipe(&pool, 1, id).await.unwrap().expect("Expected recipe to exist");
         assert_eq!(loaded.name, "Updated");
         assert_eq!(loaded.source_url, Some("https://updated.com".to_string()));
     }
@@ -821,7 +823,7 @@ mod tests {
             instructions: vec!["Boil water".to_string(), "Add salt".to_string()],
         };
         let id = add_recipe(&pool, 1, &recipe).await.unwrap();
-        let loaded = load_recipe(&pool, 1, id).await.unwrap();
+        let loaded = load_recipe(&pool, 1, id).await.unwrap().unwrap();
         assert_eq!(loaded.ingredients.len(), 2);
         assert_eq!(loaded.ingredients[0].name, "Water");
         assert!((loaded.ingredients[0].quantity - 1.5).abs() < f32::EPSILON);
@@ -956,7 +958,7 @@ mod tests {
         let recipe_id = add_recipe(&pool, 1, &recipe).await.unwrap();
         delete_user(&pool, 1).await.expect("delete should succeed");
         // ON DELETE CASCADE must have removed the recipe
-        assert!(load_recipe(&pool, 1, recipe_id).await.is_err());
+        assert!(load_recipe(&pool, 1, recipe_id).await.unwrap().is_none());
     }
 
     #[tokio::test]

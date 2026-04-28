@@ -82,11 +82,7 @@ pub async fn get_user_info_by_id(pool: &SqlitePool, user_id: i64) -> Result<Opti
 ///
 /// Returns `Err` if the storage query itself fails (e.g. database I/O error).
 pub async fn get_recipe_by_id(pool: &SqlitePool, user_id: i64, id: i64) -> Result<Option<Recipe>, String> {
-    match storage::load_recipe(pool, user_id, id).await {
-        Ok(recipe) => Ok(Some(recipe)),
-        Err(e) if e.contains("not found") => Ok(None),
-        Err(e) => Err(e),
-    }
+    storage::load_recipe(pool, user_id, id).await
 }
 
 /// Adds a new recipe to storage for the given user.
