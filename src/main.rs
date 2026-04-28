@@ -210,6 +210,12 @@ async fn run_migration(pool: &sqlx::SqlitePool, version: &str, sql: &str) {
     }
 }
 
+/// Axum middleware that injects a `Content-Security-Policy` header into every
+/// response. The policy restricts resource origins to `'self'` plus
+/// `cdn.jsdelivr.net` for Bootstrap CSS/JS and Bootstrap Icons.
+///
+/// When adding new CDN dependencies, extend the relevant directive here.
+/// When removing cdn.jsdelivr.net, remove it from all directives below.
 async fn add_csp_header(request: Request<axum::body::Body>, next: Next) -> Response {
     let mut response = next.run(request).await;
     response.headers_mut().insert(

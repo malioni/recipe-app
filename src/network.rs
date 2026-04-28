@@ -287,8 +287,9 @@ pub async fn handle_new_recipe_page(_auth: AuthUser) -> impl IntoResponse {
 ///
 /// # Errors
 ///
-/// Returns `500 Internal Server Error` with a JSON `{ "error": "..." }` body if
-/// validation fails (e.g. name too long, too many ingredients) or the insert fails.
+/// Returns `400 Bad Request` with a JSON `{ "error": "..." }` body if validation
+/// fails (e.g. name too long, too many ingredients, negative quantity). Returns
+/// `500 Internal Server Error` if the database insert fails.
 pub async fn handle_add_recipe(
     auth: AuthUser,
     State(pool): State<SqlitePool>,
@@ -297,11 +298,16 @@ pub async fn handle_add_recipe(
     match manager::add_recipe(&pool, auth.user_id, new_recipe).await {
         Ok(_) => {
             tracing::info!("Recipe added");
-            (StatusCode::CREATED, Json(serde_json::json!({ "status": "created" })))
+            (StatusCode::CREATED, Json(serde_json::json!({ "status": "created" }))).into_response()
         }
         Err(err_msg) => {
             tracing::error!("Error saving recipe: {err_msg}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": err_msg })))
+            let status = if err_msg.contains("Validation error:") {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (status, Json(serde_json::json!({ "error": err_msg }))).into_response()
         }
     }
 }
@@ -361,8 +367,9 @@ pub async fn handle_delete_recipe(
 ///
 /// # Errors
 ///
-/// Returns `500 Internal Server Error` with a JSON `{ "error": "..." }` body if
-/// validation fails, the recipe does not exist for this user, or the query fails.
+/// Returns `400 Bad Request` with a JSON `{ "error": "..." }` body if validation
+/// fails (e.g. name too long). Returns `500 Internal Server Error` if the recipe
+/// does not exist for this user or the query fails.
 pub async fn handle_update_recipe(
     auth: AuthUser,
     State(pool): State<SqlitePool>,
@@ -372,11 +379,16 @@ pub async fn handle_update_recipe(
     match manager::update_recipe(&pool, auth.user_id, id, updated_recipe).await {
         Ok(_) => {
             tracing::info!("Recipe {} updated", id);
-            (StatusCode::OK, Json(serde_json::json!({ "status": "updated" })))
+            (StatusCode::OK, Json(serde_json::json!({ "status": "updated" }))).into_response()
         }
         Err(err_msg) => {
             tracing::error!("Error updating recipe {id}: {err_msg}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": err_msg })))
+            let status = if err_msg.contains("Validation error:") {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (status, Json(serde_json::json!({ "error": err_msg }))).into_response()
         }
     }
 }
@@ -545,8 +557,8 @@ pub async fn handle_delete_meal_entry(
 
 /// Records that a recipe was cooked on a given date.
 ///
-/// The cooked log is append-only; the same recipe can be marked cooked
-/// multiple times on the same day. Delegates to
+/// Duplicate entries for the same `(user_id, date, recipe_id)` are silently
+/// ignored via `INSERT OR IGNORE` — this handler is idempotent. Delegates to
 /// [`calendar_manager::mark_as_cooked`].
 ///
 /// # Parameters
