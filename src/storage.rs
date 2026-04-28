@@ -778,4 +778,22 @@ mod tests {
         let result = load_user_info_by_id(&pool, 999_999).await.unwrap();
         assert!(result.is_none());
     }
+
+    #[tokio::test]
+    async fn test_apply_migration_executes_sql() {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        ensure_migrations_table(&pool).await.unwrap();
+        let sql = "CREATE TABLE IF NOT EXISTS _test_tbl (id INTEGER PRIMARY KEY)";
+        apply_migration(&pool, sql).await.expect("first call should succeed");
+        // Same idempotent SQL should succeed again — apply_migration does not
+        // check the tracking table; the caller is responsible for that.
+        apply_migration(&pool, sql).await.expect("second call with idempotent SQL should succeed");
+    }
+
+    #[tokio::test]
+    async fn test_apply_migration_invalid_sql_returns_err() {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        let result = apply_migration(&pool, "THIS IS NOT VALID SQL").await;
+        assert!(result.is_err(), "invalid SQL should return Err");
+    }
 }
