@@ -176,7 +176,7 @@ The following threat model should be kept in mind when making architectural deci
 
 ---
 
-### 39. [ ] Optimise `GET /profile/me` — direct user lookup
+### 39. [x] Optimise `GET /profile/me` — direct user lookup
 
 **Context:** `handle_profile_me` currently calls `manager::admin_list_users` (full table scan) and filters in memory to find the current user. A targeted lookup by ID is cheaper and simpler.
 
