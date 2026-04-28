@@ -77,15 +77,6 @@ async function loadRecipeList() {
       link.href = `#/recipes/${recipe.id}`;
       link.className = "card shadow-sm h-100 recipe-card";
 
-      const placeholder = document.createElement("div");
-      placeholder.className =
-        "d-flex align-items-center justify-content-center bg-secondary-subtle";
-      placeholder.style.height = "160px";
-      const icon = document.createElement("i");
-      icon.className = "bi bi-journal-text text-secondary";
-      icon.style.fontSize = "2.5rem";
-      placeholder.appendChild(icon);
-
       const body = document.createElement("div");
       body.className = "card-body";
 
@@ -94,7 +85,7 @@ async function loadRecipeList() {
       title.textContent = recipe.name;
 
       const meta = document.createElement("small");
-      meta.className = "text-muted";
+      meta.className = "text-muted d-block";
       meta.textContent = `${recipe.ingredients.length} ingredient${
         recipe.ingredients.length !== 1 ? "s" : ""
       } · ${recipe.instructions.length} step${
@@ -103,7 +94,17 @@ async function loadRecipeList() {
 
       body.appendChild(title);
       body.appendChild(meta);
-      link.appendChild(placeholder);
+
+      if (recipe.source_url) {
+        const sourceBadge = document.createElement("small");
+        sourceBadge.className = "text-muted d-block mt-1";
+        const sourceIcon = document.createElement("i");
+        sourceIcon.className = "bi bi-link-45deg me-1";
+        sourceBadge.appendChild(sourceIcon);
+        sourceBadge.appendChild(document.createTextNode("Source available"));
+        body.appendChild(sourceBadge);
+      }
+
       link.appendChild(body);
       col.appendChild(link);
       grid.appendChild(col);
