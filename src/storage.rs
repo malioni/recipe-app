@@ -647,12 +647,6 @@ mod tests {
             .expect("Failed to create in-memory database");
         sqlx::query(include_str!("../migrations/001_initial.sql"))
             .execute(&pool).await.expect("Failed to run migration 001");
-        sqlx::query(include_str!("../migrations/002_multiple_entries_per_slot.sql"))
-            .execute(&pool).await.expect("Failed to run migration 002");
-        sqlx::query(include_str!("../migrations/003_add_portions_to_meal_plan.sql"))
-            .execute(&pool).await.expect("Failed to run migration 003");
-        sqlx::query(include_str!("../migrations/004_add_is_admin_to_users.sql"))
-            .execute(&pool).await.expect("Failed to run migration 004");
         sqlx::query(
             "INSERT INTO users (id, username, password_hash) VALUES (1, 'test', 'placeholder')"
         )
@@ -672,8 +666,6 @@ mod tests {
     async fn test_any_users_exist_false() {
         let pool = SqlitePool::connect(":memory:").await.unwrap();
         sqlx::query(include_str!("../migrations/001_initial.sql"))
-            .execute(&pool).await.unwrap();
-        sqlx::query(include_str!("../migrations/002_multiple_entries_per_slot.sql"))
             .execute(&pool).await.unwrap();
         assert!(!any_users_exist(&pool).await.unwrap());
     }
@@ -803,12 +795,6 @@ mod tests {
     async fn test_create_user() {
         let pool = SqlitePool::connect(":memory:").await.unwrap();
         sqlx::query(include_str!("../migrations/001_initial.sql"))
-            .execute(&pool).await.unwrap();
-        sqlx::query(include_str!("../migrations/002_multiple_entries_per_slot.sql"))
-            .execute(&pool).await.unwrap();
-        sqlx::query(include_str!("../migrations/003_add_portions_to_meal_plan.sql"))
-            .execute(&pool).await.unwrap();
-        sqlx::query(include_str!("../migrations/004_add_is_admin_to_users.sql"))
             .execute(&pool).await.unwrap();
         let id = create_user(&pool, "alice", "hash123").await.expect("Failed to create user");
         assert!(id > 0);

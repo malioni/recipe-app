@@ -45,12 +45,6 @@ async fn build_test_app() -> (Router, SqlitePool) {
     let pool = SqlitePool::connect(":memory:").await.unwrap();
     sqlx::query(include_str!("../migrations/001_initial.sql"))
         .execute(&pool).await.unwrap();
-    sqlx::query(include_str!("../migrations/002_multiple_entries_per_slot.sql"))
-        .execute(&pool).await.unwrap();
-    sqlx::query(include_str!("../migrations/003_add_portions_to_meal_plan.sql"))
-        .execute(&pool).await.unwrap();
-    sqlx::query(include_str!("../migrations/004_add_is_admin_to_users.sql"))
-        .execute(&pool).await.unwrap();
 
     let hash = auth::hash_password("password").unwrap();
     let admin_id = storage::create_user(&pool, "admin", &hash).await.unwrap();
@@ -581,9 +575,6 @@ async fn test_migration_idempotent() {
             storage::ensure_migrations_table(&pool).await.expect("ensure_migrations_table");
             for (version, sql) in [
                 ("001", include_str!("../migrations/001_initial.sql")),
-                ("002", include_str!("../migrations/002_multiple_entries_per_slot.sql")),
-                ("003", include_str!("../migrations/003_add_portions_to_meal_plan.sql")),
-                ("004", include_str!("../migrations/004_add_is_admin_to_users.sql")),
             ] {
                 if !storage::is_migration_applied(&pool, version).await.expect("is_migration_applied") {
                     sqlx::query(sql).execute(&pool).await.expect("run migration sql");
