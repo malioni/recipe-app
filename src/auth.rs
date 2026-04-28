@@ -1,16 +1,18 @@
 /// Authentication module.
 ///
 /// Provides:
-///   - `hash_password` / `verify_password` — argon2 wrappers
+///   - `hash_password` / `verify_password` — argon2id wrappers
 ///   - `AuthUser` — an Axum extractor that validates the session on every
 ///     protected request and returns the authenticated user's ID.
+///   - `AuthAdmin` — an Axum extractor that additionally requires the
+///     authenticated user to have `is_admin = true`.
 ///
-/// To protect a handler, add `auth: AuthUser` as a parameter. If no valid
-/// session exists, the extractor automatically redirects to `/login` so
-/// individual handlers never need to check authentication themselves.
-///
-/// When multi-user support is fully implemented, replace `SINGLE_USER_ID`
-/// in `manager.rs` and `calendar_manager.rs` with `auth.user_id`.
+/// Multi-user support is fully implemented. All domain tables (`recipes`,
+/// `meal_plan`, `cooked_log`) carry a `user_id` column and every query is
+/// scoped to the authenticated user. To protect a handler, add `auth: AuthUser`
+/// (or `auth: AuthAdmin` for admin-only routes) as a parameter — the extractor
+/// handles the redirect or 403 response automatically; individual handlers
+/// never check authentication themselves.
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,

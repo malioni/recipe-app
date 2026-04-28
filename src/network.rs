@@ -14,6 +14,15 @@ use crate::manager;
 use crate::calendar_manager;
 use crate::model::{ChangePasswordForm, CreateUserForm, LoginForm, MealEntry, CookedEntry, Recipe, SelfChangePasswordForm};
 
+// HTML pages embedded at compile time — no runtime file I/O on each request.
+const HTML_LOGIN: &str = include_str!("../html/login.html");
+const HTML_INDEX: &str = include_str!("../html/index.html");
+const HTML_ADD_RECIPE: &str = include_str!("../html/add-recipe.html");
+const HTML_CALENDAR: &str = include_str!("../html/calendar.html");
+const HTML_ADMIN: &str = include_str!("../html/admin.html");
+const HTML_PROFILE: &str = include_str!("../html/profile.html");
+const HTML_404: &str = include_str!("../html/404.html");
+
 // ---------------------------------------------------------------------------
 // Auth handlers
 // ---------------------------------------------------------------------------
@@ -30,13 +39,7 @@ pub async fn handle_login_page(session: Session) -> impl IntoResponse {
         return Redirect::to("/").into_response();
     }
 
-    match tokio::fs::read_to_string("html/login.html").await {
-        Ok(html) => Html(html).into_response(),
-        Err(e) => {
-            tracing::error!("Failed to read login.html: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Html("<h1>Internal Server Error</h1>".to_string())).into_response()
-        }
-    }
+    Html(HTML_LOGIN).into_response()
 }
 
 /// POST /login — validates credentials and creates a session.
@@ -98,13 +101,7 @@ pub async fn handle_logout(session: Session) -> impl IntoResponse {
 // ---------------------------------------------------------------------------
 
 pub async fn handle_index(_auth: AuthUser) -> impl IntoResponse {
-    match tokio::fs::read_to_string("html/index.html").await {
-        Ok(html) => Html(html).into_response(),
-        Err(e) => {
-            tracing::error!("Failed to read index.html: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Html("<h1>Internal Server Error</h1>".to_string())).into_response()
-        }
-    }
+    Html(HTML_INDEX)
 }
 
 pub async fn handle_all_recipes(
@@ -129,14 +126,14 @@ pub async fn handle_recipe(
     }
 }
 
+/// GET /recipes/new — serves the recipe creation/editing form.
+///
+/// This handler serves both the new-recipe form and the edit-recipe form.
+/// When editing, the client-side JavaScript reads `?id=<recipe_id>` from the
+/// URL and pre-populates the form with the existing recipe data fetched from
+/// `GET /recipes/:id`. No query parameter is needed server-side.
 pub async fn handle_new_recipe_page(_auth: AuthUser) -> impl IntoResponse {
-    match tokio::fs::read_to_string("html/add-recipe.html").await {
-        Ok(html) => Html(html).into_response(),
-        Err(e) => {
-            tracing::error!("Failed to read add-recipe.html: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Html("<h1>Internal Server Error</h1>".to_string())).into_response()
-        }
-    }
+    Html(HTML_ADD_RECIPE)
 }
 
 pub async fn handle_add_recipe(
@@ -213,13 +210,7 @@ pub struct DeleteMealParams {
 // ---------------------------------------------------------------------------
 
 pub async fn handle_calendar_page(_auth: AuthUser) -> impl IntoResponse {
-    match tokio::fs::read_to_string("html/calendar.html").await {
-        Ok(html) => Html(html).into_response(),
-        Err(e) => {
-            tracing::error!("Failed to read calendar.html: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Html("<h1>Internal Server Error</h1>".to_string())).into_response()
-        }
-    }
+    Html(HTML_CALENDAR)
 }
 
 // ---------------------------------------------------------------------------
@@ -336,13 +327,7 @@ pub async fn handle_shopping_list(
 
 /// GET /admin — serves the admin user management page.
 pub async fn handle_admin_page(_auth: AuthAdmin) -> impl IntoResponse {
-    match tokio::fs::read_to_string("html/admin.html").await {
-        Ok(html) => Html(html).into_response(),
-        Err(e) => {
-            tracing::error!("Failed to read admin.html: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Html("<h1>Internal Server Error</h1>".to_string())).into_response()
-        }
-    }
+    Html(HTML_ADMIN)
 }
 
 /// GET /admin/users — returns all users as JSON (no password hashes).
@@ -424,13 +409,9 @@ pub async fn handle_profile_me(
     auth: AuthUser,
     State(pool): State<SqlitePool>,
 ) -> impl IntoResponse {
-    match manager::admin_list_users(&pool).await {
-        Ok(users) => {
-            match users.into_iter().find(|u| u.id == auth.user_id) {
-                Some(me) => (StatusCode::OK, Json(me)).into_response(),
-                None => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "User not found" }))).into_response(),
-            }
-        }
+    match manager::get_user_info_by_id(&pool, auth.user_id).await {
+        Ok(Some(me)) => (StatusCode::OK, Json(me)).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "User not found" }))).into_response(),
         Err(err_msg) => {
             tracing::error!("Error loading profile: {err_msg}");
             (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": err_msg }))).into_response()
@@ -440,13 +421,7 @@ pub async fn handle_profile_me(
 
 /// GET /profile — serves the self-service password change page.
 pub async fn handle_profile_page(_auth: AuthUser) -> impl IntoResponse {
-    match tokio::fs::read_to_string("html/profile.html").await {
-        Ok(html) => Html(html).into_response(),
-        Err(e) => {
-            tracing::error!("Failed to read profile.html: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Html("<h1>Internal Server Error</h1>".to_string())).into_response()
-        }
-    }
+    Html(HTML_PROFILE)
 }
 
 /// POST /profile/password — changes the authenticated user's own password.
@@ -471,13 +446,7 @@ pub async fn handle_change_own_password(
 // Error Handling
 // ---------------------------------------------------------------------------
 pub async fn handle_404() -> Response {
-    match tokio::fs::read_to_string("html/404.html").await {
-        Ok(html) => (StatusCode::NOT_FOUND, Html(html)).into_response(),
-        Err(e) => {
-            tracing::error!("Failed to read 404.html: {e}");
-            (StatusCode::NOT_FOUND, Html("<h1>404 Not Found</h1>".to_string())).into_response()
-        }
-    }
+    (StatusCode::NOT_FOUND, Html(HTML_404)).into_response()
 }
 
 // ---------------------------------------------------------------------------

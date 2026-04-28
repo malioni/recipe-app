@@ -11,18 +11,29 @@ use crate::calendar_storage;
 use crate::storage;
 
 /// Maximum number of meal plan entries a single user may have at once.
+///
+/// Acts as an application-level storage cap: a user with thousands of entries
+/// would cause the weekly calendar queries to become slow and the shopping list
+/// to be unusably large. 1 000 covers roughly 2–3 years of daily planning.
 #[cfg(not(test))]
 const MAX_MEAL_PLAN_ENTRIES: usize = 1000;
 #[cfg(test)]
 const MAX_MEAL_PLAN_ENTRIES: usize = 3;
 
 /// Maximum number of entries allowed per (user, date, slot) combination.
+///
+/// Allows a user to plan a main dish plus one or two sides for the same meal
+/// slot without filling the UI card with an unbounded number of recipes.
 #[cfg(not(test))]
 const MAX_ENTRIES_PER_SLOT: usize = 3;
 #[cfg(test)]
 const MAX_ENTRIES_PER_SLOT: usize = 2;
 
-/// Maximum number of portions allowed per meal plan entry.
+/// Maximum number of portions (serving multiplier) allowed per meal plan entry.
+///
+/// Portions scale all ingredient quantities in the shopping list. A cap of 10
+/// prevents accidental overflow values that would produce nonsensical quantities
+/// (e.g. 500 portions of flour).
 const MAX_PORTIONS: i64 = 10;
 
 // ---------------------------------------------------------------------------
@@ -173,6 +184,10 @@ pub async fn get_shopping_list(
     ).await?;
 
     // Accumulate in base units (g / ml) keyed by (lowercase_name, canonical_unit).
+    // Using lowercase name means "Flour" and "flour" merge into one entry.
+    // Using canonical unit means weight-flour (g) and volume-flour (ml) stay
+    // separate, because they are physically different measurements that cannot
+    // be summed.
     let mut aggregated: Vec<Ingredient> = Vec::new();
 
     for entry in entries {
@@ -205,10 +220,27 @@ pub async fn get_shopping_list(
 /// Converts an internally-accumulated `(name, base_unit, base_qty)` triple into
 /// a display-ready [`ShoppingListItem`].
 ///
-/// `base_unit` must be one of `"g"`, `"ml"`, or an unrecognised passthrough.
-/// Metric quantities are ceiled to a step (10 below the 100-unit threshold,
-/// 100 above it) and expressed in `g`/`kg` or `ml`/`l`. Imperial quantities
-/// are ceiled to the nearest whole `oz` (weight) or `fl oz` (volume).
+/// **`base_unit`** must be one of `"g"`, `"ml"`, or an unrecognised passthrough
+/// (e.g. `"clove"`, `"piece"`, `""`).
+///
+/// **Metric rounding** — quantities are ceiled to a human-friendly step:
+/// - Below 100: step of 10 → stays in `g` / `ml`  (e.g. 61 g → 70 g)
+/// - 100 or above: step of 100, then divided by 1 000 → expressed in `kg` / `l`
+///   (e.g. 650 g → 0.7 kg)
+///
+/// The threshold `< 100.0` means exactly 100 g goes to the kg branch (0.1 kg).
+///
+/// **Imperial conversion factors** (applied to the raw base quantity before ceiling):
+/// - Weight: 1 g = 0.035274 oz  → `ceil(base_qty × 0.035274)` oz
+/// - Volume: 1 ml = 0.033814 fl oz → `ceil(base_qty × 0.033814)` fl oz
+///
+/// Passthrough units have no imperial equivalent; `imperial_quantity` and
+/// `imperial_unit` are `None`.
+///
+/// # Example
+///
+/// `to_display_item("flour", "g", 650.0)` → `ShoppingListItem { metric_quantity: 0.7,
+/// metric_unit: "kg", imperial_quantity: Some(23.0), imperial_unit: Some("oz") }`
 fn to_display_item(name: String, base_unit: &str, base_qty: f32) -> ShoppingListItem {
     match base_unit {
         "g" => {
@@ -253,19 +285,43 @@ fn to_display_item(name: String, base_unit: &str, base_qty: f32) -> ShoppingList
 
 /// Ceils `value` to the nearest multiple of `step`.
 ///
-/// The result is always ≥ `value` (i.e. never rounded down).
+/// The result is always ≥ `value` (i.e. never rounded down). Exact multiples
+/// are returned unchanged.
+///
+/// Used by [`to_display_item`] to produce human-friendly shopping quantities
+/// (e.g. "buy 70 g" rather than "buy 61 g").
+///
+/// # Examples
+///
+/// - `ceil_to(61.0, 10.0)` → `70.0`
+/// - `ceil_to(70.0, 10.0)` → `70.0` (exact multiple, unchanged)
+/// - `ceil_to(650.0, 100.0)` → `700.0`
 fn ceil_to(value: f32, step: f32) -> f32 {
     (value / step).ceil() * step
 }
 
-/// Maps a unit string to its canonical form and scales the quantity accordingly.
+/// Maps a unit string to its canonical base unit and scales the quantity accordingly.
 ///
 /// All weight units normalise to `"g"`; all volume units normalise to `"ml"`.
-/// Unrecognised units are returned unchanged so ingredients with exotic or
-/// count-based units (e.g. "clove", "piece") still aggregate by exact match.
+/// Matching is case-insensitive. Unrecognised units (including empty string and
+/// count-based labels like `"clove"` or `"piece"`) are returned unchanged so
+/// they still aggregate correctly by exact string match.
+///
+/// **Conversion factors used:**
+/// - `kg` → g: × 1 000
+/// - `oz` / `ounce` → g: × 28.3495
+/// - `lb` / `lbs` / `pound` → g: × 453.592
+/// - `l` / `liter` / `litre` → ml: × 1 000
+/// - `tsp` / `teaspoon` → ml: × 4.92892
+/// - `tbsp` / `tablespoon` → ml: × 14.7868
+/// - `cup` / `cups` → ml: × 236.588
 ///
 /// Returns a `Cow` so known units borrow a `'static` literal (no allocation);
 /// only the passthrough branch borrows the caller's input slice.
+///
+/// # Example
+///
+/// `normalise_unit("kg", 0.5)` → `(Cow::Borrowed("g"), 500.0)`
 fn normalise_unit<'a>(unit: &'a str, quantity: f32) -> (Cow<'a, str>, f32) {
     match unit.to_lowercase().as_str() {
         // Weight → g

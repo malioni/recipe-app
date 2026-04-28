@@ -59,6 +59,30 @@ pub async fn load_user_by_id(pool: &SqlitePool, user_id: i64) -> Result<Option<U
     }))
 }
 
+/// Loads a single user by their primary key as a public `UserInfo` record (no password hash).
+///
+/// Returns `None` if no user exists with that ID.
+///
+/// # Errors
+///
+/// Returns `Err` if the query fails.
+pub async fn load_user_info_by_id(pool: &SqlitePool, user_id: i64) -> Result<Option<UserInfo>, String> {
+    let row = sqlx::query!(
+        "SELECT id, username, is_admin, created_at FROM users WHERE id = ?",
+        user_id
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Failed to query user: {e}"))?;
+
+    Ok(row.map(|r| UserInfo {
+        id: r.id,
+        username: r.username,
+        is_admin: r.is_admin != 0,
+        created_at: r.created_at,
+    }))
+}
+
 /// Returns all users as public `UserInfo` records (no password hashes).
 ///
 /// # Errors

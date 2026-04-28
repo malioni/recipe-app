@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS recipes (
 -- UNIQUE(user_id, date, slot) enforces the "one recipe per slot per day"
 -- rule at the database level. ON DELETE CASCADE removes meal plan entries
 -- automatically when the referenced recipe or user is deleted.
+-- NOTE: migration 002 removes the UNIQUE constraint to allow multiple recipes
+-- per slot (e.g. a main dish plus sides). The comment is kept here for history.
 CREATE TABLE IF NOT EXISTS meal_plan (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

@@ -26,6 +26,19 @@ pub async fn get_user_by_username(pool: &SqlitePool, username: &str) -> Result<O
     storage::load_user_by_username(pool, username).await
 }
 
+/// Returns the public profile of a single user by their primary key.
+///
+/// Returns `None` if no user exists with that ID. The returned [`UserInfo`]
+/// never includes the password hash — it is safe to serialize directly into
+/// an API response.
+///
+/// # Errors
+///
+/// Returns `Err` if the query fails.
+pub async fn get_user_info_by_id(pool: &SqlitePool, user_id: i64) -> Result<Option<UserInfo>, String> {
+    storage::load_user_info_by_id(pool, user_id).await
+}
+
 // ---------------------------------------------------------------------------
 // Recipes
 // ---------------------------------------------------------------------------
