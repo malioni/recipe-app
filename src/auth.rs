@@ -81,10 +81,12 @@ pub struct AuthUser {
 /// The error type returned when the extractor cannot authenticate the request.
 /// Always redirects to the login page rather than returning a 401, since this
 /// is a browser-facing app.
+#[derive(Debug)]
 pub struct AuthRedirect;
 
 /// The error type returned when an authenticated user lacks admin privileges.
 /// Returns 403 Forbidden rather than redirecting to login.
+#[derive(Debug)]
 pub struct AuthForbidden;
 
 impl IntoResponse for AuthRedirect {
@@ -163,5 +165,98 @@ where
         }
 
         Ok(AuthAdmin { user_id })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::Request;
+    use std::sync::Arc;
+    use tower_sessions::{MemoryStore, Session};
+
+    /// Build a minimal `Parts` with the given session injected into extensions,
+    /// mirroring what `SessionManagerLayer` does at runtime.
+    fn parts_with_session(session: Session) -> axum::http::request::Parts {
+        let (mut parts, _) = Request::builder().body(()).unwrap().into_parts();
+        parts.extensions.insert(session);
+        parts
+    }
+
+    fn make_session() -> Session {
+        Session::new(None, Arc::new(MemoryStore::default()), None)
+    }
+
+    // -- AuthUser -------------------------------------------------------------
+
+    /// No session in extensions → redirect to /login.
+    #[tokio::test]
+    async fn test_auth_user_no_session_redirects() {
+        let (mut parts, _) = Request::builder().body(()).unwrap().into_parts();
+        let result = AuthUser::from_request_parts(&mut parts, &()).await;
+        assert!(result.is_err());
+    }
+
+    /// Session present but `user_id` key missing → redirect to /login.
+    #[tokio::test]
+    async fn test_auth_user_missing_user_id_redirects() {
+        let session = make_session();
+        let mut parts = parts_with_session(session);
+        let result = AuthUser::from_request_parts(&mut parts, &()).await;
+        assert!(result.is_err());
+    }
+
+    /// Session present and `user_id` set → returns the correct `AuthUser`.
+    #[tokio::test]
+    async fn test_auth_user_valid_session_returns_user_id() {
+        let session = make_session();
+        session.insert(SESSION_USER_ID_KEY, 42i64).await.unwrap();
+        let mut parts = parts_with_session(session);
+        let auth = AuthUser::from_request_parts(&mut parts, &()).await.unwrap();
+        assert_eq!(auth.user_id, 42);
+    }
+
+    // -- AuthAdmin ------------------------------------------------------------
+
+    /// Session present but `user_id` key missing → 403 Forbidden.
+    #[tokio::test]
+    async fn test_auth_admin_missing_user_id_forbidden() {
+        let session = make_session();
+        let mut parts = parts_with_session(session);
+        let result = AuthAdmin::from_request_parts(&mut parts, &()).await;
+        assert!(result.is_err());
+    }
+
+    /// Session has `user_id` but `is_admin` is false → 403 Forbidden.
+    #[tokio::test]
+    async fn test_auth_admin_not_admin_forbidden() {
+        let session = make_session();
+        session.insert(SESSION_USER_ID_KEY, 1i64).await.unwrap();
+        session.insert(SESSION_IS_ADMIN_KEY, false).await.unwrap();
+        let mut parts = parts_with_session(session);
+        let result = AuthAdmin::from_request_parts(&mut parts, &()).await;
+        assert!(result.is_err());
+    }
+
+    /// Session has `user_id` but `is_admin` key is absent → defaults to false → 403.
+    #[tokio::test]
+    async fn test_auth_admin_missing_is_admin_key_forbidden() {
+        let session = make_session();
+        session.insert(SESSION_USER_ID_KEY, 1i64).await.unwrap();
+        // is_admin key intentionally not set; unwrap_or(false) should deny
+        let mut parts = parts_with_session(session);
+        let result = AuthAdmin::from_request_parts(&mut parts, &()).await;
+        assert!(result.is_err());
+    }
+
+    /// Session has `user_id` and `is_admin = true` → returns the correct `AuthAdmin`.
+    #[tokio::test]
+    async fn test_auth_admin_valid_session_returns_user_id() {
+        let session = make_session();
+        session.insert(SESSION_USER_ID_KEY, 7i64).await.unwrap();
+        session.insert(SESSION_IS_ADMIN_KEY, true).await.unwrap();
+        let mut parts = parts_with_session(session);
+        let auth = AuthAdmin::from_request_parts(&mut parts, &()).await.unwrap();
+        assert_eq!(auth.user_id, 7);
     }
 }

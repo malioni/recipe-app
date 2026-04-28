@@ -1260,16 +1260,21 @@ async fn test_admin_delete_user_cascades_data_api() {
         .await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
 
-    // Verify at DB level: recipes and meal_plan entries for user2 are gone.
-    let recipe_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM recipes WHERE user_id = ?")
-        .bind(user2_id)
-        .fetch_one(&pool).await.unwrap();
-    assert_eq!(recipe_count, 0, "User2's recipes must be cascade-deleted");
+    // Verify via API: user2's session still has their user_id, but their data
+    // was cascade-deleted so both endpoints return empty collections.
+    let body = app.clone()
+        .oneshot(get_req("/recipes", &user2_cookie))
+        .await.unwrap()
+        .into_body().collect().await.unwrap().to_bytes();
+    let recipes: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert!(recipes.is_empty(), "User2's recipes must be cascade-deleted");
 
-    let meal_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM meal_plan WHERE user_id = ?")
-        .bind(user2_id)
-        .fetch_one(&pool).await.unwrap();
-    assert_eq!(meal_count, 0, "User2's meal plan entries must be cascade-deleted");
+    let body = app.clone()
+        .oneshot(get_req("/calendar/entries?start=2026-12-01&end=2026-12-01", &user2_cookie))
+        .await.unwrap()
+        .into_body().collect().await.unwrap().to_bytes();
+    let entries: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert!(entries.is_empty(), "User2's meal plan entries must be cascade-deleted");
 }
 
 // ---------------------------------------------------------------------------
