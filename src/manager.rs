@@ -562,4 +562,19 @@ mod tests {
         let r = Recipe { id: 0, name: "Boundary Unit".to_string(), source_url: None, ingredients, instructions: vec![] };
         assert!(add_recipe(&pool, 1, r).await.is_ok());
     }
+
+    #[tokio::test]
+    async fn test_get_user_info_by_id_found() {
+        let pool = setup().await;
+        let result = get_user_info_by_id(&pool, 1).await.unwrap();
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().username, "test");
+    }
+
+    #[tokio::test]
+    async fn test_get_user_info_by_id_not_found() {
+        let pool = setup().await;
+        let result = get_user_info_by_id(&pool, 999_999).await.unwrap();
+        assert!(result.is_none());
+    }
 }

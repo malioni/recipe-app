@@ -554,4 +554,26 @@ mod tests {
         let ingredients: Vec<serde_json::Value> = from_slice(&body_bytes).unwrap();
         assert!(ingredients.is_empty());
     }
+
+    #[tokio::test]
+    async fn test_handle_profile_me_returns_current_user() {
+        let pool = setup().await;
+        let response = handle_profile_me(AuthUser { user_id: 1 }, State(pool))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let me: serde_json::Value = from_slice(&body_bytes).unwrap();
+        assert_eq!(me["username"], "test");
+        assert_eq!(me["id"], 1);
+    }
+
+    #[tokio::test]
+    async fn test_handle_profile_me_user_not_found() {
+        let pool = setup().await;
+        let response = handle_profile_me(AuthUser { user_id: 999_999 }, State(pool))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
 }

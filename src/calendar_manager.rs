@@ -945,4 +945,114 @@ mod tests {
         let (u, q) = normalise_unit("", 1.0);
         assert_eq!(u, ""); assert!((q - 1.0).abs() < 0.001);
     }
+
+    // -------------------------------------------------------------------------
+    // Quota isolation and release tests
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_quota_per_user_isolation() {
+        let pool = setup().await;
+        // Insert a second user and a recipe they own.
+        sqlx::query("INSERT INTO users (id, username, password_hash) VALUES (2, 'user2', 'placeholder')")
+            .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (2, 2, 'User2 Recipe', '[]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+
+        // Fill user 1's quota (MAX_MEAL_PLAN_ENTRIES = 3 in test mode).
+        let slots = [MealSlot::Breakfast, MealSlot::Lunch, MealSlot::Dinner];
+        let base = NaiveDate::from_ymd_opt(2031, 1, 1).unwrap();
+        for i in 0..MAX_MEAL_PLAN_ENTRIES {
+            let date = base + chrono::Duration::days((i / slots.len()) as i64);
+            let slot = slots[i % slots.len()].clone();
+            plan_meal(&pool, 1, date, slot, 1, 1).await
+                .expect("user1 should succeed within quota");
+        }
+        // Confirm user 1 is at quota.
+        assert!(plan_meal(&pool, 1, base + chrono::Duration::days(99), MealSlot::Breakfast, 1, 1).await.is_err());
+
+        // User 2's quota is independent — they must still be able to plan.
+        let result = plan_meal(&pool, 2, base, MealSlot::Breakfast, 2, 1).await;
+        assert!(result.is_ok(), "User 2 must not be blocked by User 1's quota");
+    }
+
+    #[tokio::test]
+    async fn test_quota_release_after_delete() {
+        let pool = setup().await;
+        let base = NaiveDate::from_ymd_opt(2032, 1, 1).unwrap();
+        let slots = [MealSlot::Breakfast, MealSlot::Lunch, MealSlot::Dinner];
+
+        // Fill quota (3 in test mode).
+        for i in 0..MAX_MEAL_PLAN_ENTRIES {
+            let date = base + chrono::Duration::days((i / slots.len()) as i64);
+            let slot = slots[i % slots.len()].clone();
+            plan_meal(&pool, 1, date, slot, 1, 1).await
+                .expect("should succeed within quota");
+        }
+        // Adding one more should fail.
+        assert!(plan_meal(&pool, 1, base + chrono::Duration::days(99), MealSlot::Breakfast, 1, 1).await.is_err());
+
+        // Delete one entry to free a slot.
+        let meals = get_meals_in_range(
+            &pool, 1,
+            NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(9999, 12, 31).unwrap(),
+        ).await.unwrap();
+        let entry_id = meals[0].id.unwrap();
+        remove_planned_meal(&pool, 1, entry_id).await.expect("delete should succeed");
+
+        // Now adding one more must succeed.
+        let result = plan_meal(&pool, 1, base + chrono::Duration::days(99), MealSlot::Breakfast, 1, 1).await;
+        assert!(result.is_ok(), "Adding after deleting one entry should succeed");
+    }
+
+    // -------------------------------------------------------------------------
+    // Shopping list edge case tests
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_shopping_list_sub_one_gram() {
+        let pool = setup().await;
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (2, 1, 'Tiny', '[{\"name\":\"Spice\",\"quantity\":0.5,\"unit\":\"g\"}]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+
+        let date = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        plan_meal(&pool, 1, date, MealSlot::Lunch, 2, 1).await.unwrap();
+        let list = get_shopping_list(&pool, 1, date, date).await.unwrap();
+        let spice = list.iter().find(|i| i.name == "spice").unwrap();
+        // 0.5 g < 100 g → ceil_to(0.5, 10) = 10 g
+        assert_eq!(spice.metric_unit, "g");
+        assert!((spice.metric_quantity - 10.0).abs() < 0.001, "0.5 g should ceil to 10 g");
+        // imperial: ceil(0.5 × 0.035274) = ceil(0.01764) = 1 oz
+        assert_eq!(spice.imperial_quantity, Some(1.0));
+        assert_eq!(spice.imperial_unit, Some("oz".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_shopping_list_exact_threshold_boundary() {
+        let pool = setup().await;
+        // Exactly 100 g → must go to the kg branch (threshold is `< 100.0`).
+        sqlx::query(
+            "INSERT INTO recipes (id, user_id, name, ingredients, instructions) \
+             VALUES (2, 1, 'Exact', '[{\"name\":\"Boundary\",\"quantity\":100.0,\"unit\":\"g\"}]', '[]')"
+        )
+        .execute(&pool).await.unwrap();
+
+        let date = NaiveDate::from_ymd_opt(2026, 6, 2).unwrap();
+        plan_meal(&pool, 1, date, MealSlot::Lunch, 2, 1).await.unwrap();
+        let list = get_shopping_list(&pool, 1, date, date).await.unwrap();
+        let item = list.iter().find(|i| i.name == "boundary").unwrap();
+        // 100 g ≥ 100 → ceil_to(100, 100) / 1000 = 0.1 kg
+        assert_eq!(item.metric_unit, "kg", "Exactly 100 g must use the kg branch");
+        assert!((item.metric_quantity - 0.1).abs() < 0.001);
+        // imperial: ceil(100 × 0.035274) = ceil(3.5274) = 4 oz
+        assert_eq!(item.imperial_quantity, Some(4.0));
+        assert_eq!(item.imperial_unit, Some("oz".to_string()));
+    }
 }

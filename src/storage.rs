@@ -743,4 +743,22 @@ mod tests {
         // ON DELETE CASCADE must have removed the recipe
         assert!(load_recipe(&pool, 1, recipe_id).await.is_err());
     }
+
+    #[tokio::test]
+    async fn test_load_user_info_by_id_found() {
+        let pool = setup().await;
+        let info = load_user_info_by_id(&pool, 1).await.unwrap();
+        assert!(info.is_some());
+        let info = info.unwrap();
+        assert_eq!(info.username, "test");
+        assert!(!info.is_admin);
+        assert!(!info.created_at.is_empty(), "created_at must be populated");
+    }
+
+    #[tokio::test]
+    async fn test_load_user_info_by_id_not_found() {
+        let pool = setup().await;
+        let result = load_user_info_by_id(&pool, 999_999).await.unwrap();
+        assert!(result.is_none());
+    }
 }
