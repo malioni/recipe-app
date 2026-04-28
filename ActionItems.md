@@ -203,6 +203,33 @@ The following threat model should be kept in mind when making architectural deci
 
 ---
 
+### 41. [ ] Typed Error Enum in Manager Layer
+
+**Context:** `handle_add_recipe` and `handle_update_recipe` distinguish validation errors from DB errors by checking whether the error string contains `"Validation error:"`. This works today because the manager consistently prepends that prefix, but it couples the HTTP layer to an internal string convention with no compile-time guarantee.
+
+**Actions:**
+
+- Introduce a `ManagerError` enum with at least `Validation(String)` and `Db(String)` variants in `manager.rs`
+- Update all manager functions to return `Result<T, ManagerError>` instead of `Result<T, String>`
+- Update handlers in `network.rs` to match on `ManagerError::Validation` → 400, `ManagerError::Db` → 500 (removes the `contains("Validation error:")` string check)
+- Update tests that currently assert on error message substrings to match on the enum variant instead
+
+---
+
+### 42. [ ] Return 404 for Missing Recipe on Update
+
+**Context:** `handle_update_recipe` returns `500 Internal Server Error` when the target recipe does not exist for the authenticated user. A missing resource is a client fault and should be `404 Not Found`. This is blocked by item 41 (typed errors) — once `ManagerError` exists, `ManagerError::NotFound` can map to 404 cleanly.
+
+**Actions:**
+
+- Add a `NotFound` variant to `ManagerError` (see item 41)
+- In `manager::update_recipe`, return `Err(ManagerError::NotFound)` when the storage layer reports zero rows affected
+- In `handle_update_recipe`, map `ManagerError::NotFound` → `StatusCode::NOT_FOUND`
+- Update the handler's `# Errors` doc comment accordingly
+- Add an integration test: `PUT /recipes/:id` with a non-existent ID returns `404`
+
+---
+
 ### 40. [ ] Enforce Minimum Password Strength on Initial Setup
 
 **Context:** The initial admin user is seeded from `INITIAL_USERNAME` / `INITIAL_PASSWORD`
