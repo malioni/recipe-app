@@ -236,6 +236,43 @@ mod tests {
         Session::new(None, Arc::new(MemoryStore::default()), None)
     }
 
+    // -- hash_password / verify_password --------------------------------------
+
+    /// `hash_password` should produce a valid PHC-format argon2id string.
+    #[test]
+    fn test_hash_password_produces_valid_phc_string() {
+        let result = hash_password("somepassword");
+        assert!(result.is_ok(), "hash_password should not fail");
+        let hash = result.unwrap();
+        assert!(
+            hash.starts_with("$argon2id$"),
+            "hash should be in PHC argon2id format, got: {hash}"
+        );
+    }
+
+    /// Verifying the correct plaintext password against its own hash returns `Ok(true)`.
+    #[test]
+    fn test_verify_password_correct_returns_true() {
+        let hash = hash_password("correctpassword").unwrap();
+        let result = verify_password("correctpassword", &hash);
+        assert_eq!(result, Ok(true));
+    }
+
+    /// Verifying a wrong password against a valid hash returns `Ok(false)`.
+    #[test]
+    fn test_verify_password_wrong_returns_false() {
+        let hash = hash_password("correctpassword").unwrap();
+        let result = verify_password("wrongpassword", &hash);
+        assert_eq!(result, Ok(false));
+    }
+
+    /// Verifying against a malformed (non-PHC) hash string returns `Err`.
+    #[test]
+    fn test_verify_password_malformed_hash_returns_err() {
+        let result = verify_password("anything", "notaphcstring");
+        assert!(result.is_err(), "malformed hash should return Err");
+    }
+
     // -- AuthUser -------------------------------------------------------------
 
     /// No session in extensions → redirect to /login.

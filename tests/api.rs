@@ -389,7 +389,7 @@ async fn test_invalid_recipe_rejected() {
     let response = app.clone()
         .oneshot(json_req("POST", "/recipes", &cookie, bad_recipe))
         .await.unwrap();
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 // ---------------------------------------------------------------------------

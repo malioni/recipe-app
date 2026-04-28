@@ -709,6 +709,40 @@ mod tests {
         assert_eq!(loaded.instructions, vec!["Boil water"]);
     }
 
+    /// A recipe owned by user 1 must not be visible to user 2, even when the
+    /// numeric ID is known. This verifies the `AND user_id = ?` clause in
+    /// `load_recipe`.
+    #[tokio::test]
+    async fn test_load_recipe_cross_user_isolation() {
+        let pool = setup().await;
+        // Insert a second user so FK constraints are satisfied.
+        sqlx::query(
+            "INSERT INTO users (id, username, password_hash) VALUES (2, 'user2', 'placeholder')"
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let recipe = Recipe {
+            id: 0,
+            name: "Secret Recipe".to_string(),
+            source_url: None,
+            ingredients: vec![],
+            instructions: vec![],
+        };
+        let id = add_recipe(&pool, 1, &recipe).await.unwrap();
+
+        // User 1 can read their own recipe.
+        assert!(load_recipe(&pool, 1, id).await.unwrap().is_some());
+
+        // User 2 must not see user 1's recipe, even with the correct ID.
+        let result = load_recipe(&pool, 2, id).await;
+        assert!(
+            result.unwrap().is_none(),
+            "user 2 must not be able to read user 1's recipe by ID"
+        );
+    }
+
     #[tokio::test]
     async fn test_load_recipe_invalid_id() {
         let pool = setup().await;

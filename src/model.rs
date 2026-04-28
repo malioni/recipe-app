@@ -83,9 +83,11 @@ pub struct MealEntry {
     /// include it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<i64>,
-    /// Date serialized as "YYYY-MM-DD" in JSON.
+    /// The day this meal is planned for, serialized as `"YYYY-MM-DD"` in JSON.
     pub date: NaiveDate,
+    /// Which meal of the day this entry belongs to (`breakfast`, `lunch`, or `dinner`).
     pub slot: MealSlot,
+    /// The primary key of the recipe planned for this slot.
     pub recipe_id: i64,
     /// Number of times to multiply ingredient quantities for this entry.
     /// Defaults to 1 when omitted from the request body.
@@ -102,6 +104,9 @@ fn default_one() -> i64 { 1 }
 /// internal canonical unit.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ShoppingListItem {
+    /// Lowercase ingredient name used as the aggregation key (e.g. `"flour"`).
+    /// Names from different recipes are lowercased before merging so `"Flour"`
+    /// and `"flour"` collapse into a single entry.
     pub name: String,
     /// Quantity in `metric_unit` (already ceiled to the display step).
     pub metric_quantity: f32,
@@ -118,8 +123,9 @@ pub struct ShoppingListItem {
 /// A record of a recipe that was actually cooked on a given date.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct CookedEntry {
-    /// Date serialized as "YYYY-MM-DD" in JSON.
+    /// The day the recipe was cooked, serialized as `"YYYY-MM-DD"` in JSON.
     pub date: NaiveDate,
+    /// The primary key of the recipe that was cooked.
     pub recipe_id: i64,
 }
 
@@ -129,18 +135,28 @@ pub struct CookedEntry {
 /// response. The field is intentionally excluded from `Serialize`.
 #[derive(Deserialize, Debug, Clone)]
 pub struct User {
+    /// Database primary key assigned by SQLite `AUTOINCREMENT`.
     pub id: i64,
+    /// The user's unique login name.
     pub username: String,
+    /// The PHC-format argon2id hash of the user's password. Never serialize
+    /// this field; use [`UserInfo`] for API responses instead.
     pub password_hash: String,
+    /// `true` if the user has admin privileges (can access `/admin` routes).
     pub is_admin: bool,
 }
 
 /// A user record safe to return over the API — no password hash.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct UserInfo {
+    /// Database primary key.
     pub id: i64,
+    /// The user's unique login name.
     pub username: String,
+    /// `true` if the user has admin privileges.
     pub is_admin: bool,
+    /// ISO-8601 timestamp string of when the account was created, as stored
+    /// by SQLite's `datetime('now')` default.
     pub created_at: String,
 }
 

@@ -506,6 +506,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_admin_create_user_empty_username() {
+        let pool = setup().await;
+        let result = admin_create_user(&pool, "", "password123").await;
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_lowercase().contains("username"),
+            "error should mention 'username'"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_admin_create_user_username_with_whitespace() {
+        let pool = setup().await;
+        let result = admin_create_user(&pool, "user name", "password123").await;
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_lowercase().contains("whitespace"),
+            "error should mention 'whitespace'"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_admin_create_user_username_too_long() {
+        let pool = setup().await;
+        let result = admin_create_user(&pool, &"a".repeat(51), "password123").await;
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_lowercase().contains("username"),
+            "error should mention 'username'"
+        );
+    }
+
+    #[tokio::test]
     async fn test_admin_create_user_valid() {
         let pool = setup().await;
         admin_create_user(&pool, "alice", "securepassword").await.expect("should create user");
