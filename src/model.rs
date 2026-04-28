@@ -87,6 +87,7 @@ pub struct MealEntry {
     pub date: NaiveDate,
     /// Which meal of the day this entry belongs to (`breakfast`, `lunch`, or `dinner`).
     pub slot: MealSlot,
+    /// The primary key of the recipe planned for this slot.
     pub recipe_id: i64,
     /// Number of times to multiply ingredient quantities for this entry.
     /// Defaults to 1 when omitted from the request body.
