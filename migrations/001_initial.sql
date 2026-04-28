@@ -10,13 +10,11 @@ PRAGMA auto_vacuum = INCREMENTAL;
 -- ---------------------------------------------------------------------------
 -- Users
 -- ---------------------------------------------------------------------------
--- user_id is present on all domain tables from the start so that adding
--- real authentication later requires no schema migration, only replacing
--- the hardcoded SINGLE_USER_ID constant with the session user's ID.
 CREATE TABLE IF NOT EXISTS users (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     username      TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
+    is_admin      INTEGER NOT NULL DEFAULT 0,
     created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -25,8 +23,7 @@ CREATE TABLE IF NOT EXISTS users (
 -- ---------------------------------------------------------------------------
 -- ingredients and instructions are stored as JSON arrays. They are always
 -- loaded together with the recipe and never queried individually, so
--- normalizing them into separate tables would add complexity with no benefit
--- at this stage.
+-- normalizing them into separate tables would add complexity with no benefit.
 CREATE TABLE IF NOT EXISTS recipes (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -39,25 +36,22 @@ CREATE TABLE IF NOT EXISTS recipes (
 -- ---------------------------------------------------------------------------
 -- Meal plan
 -- ---------------------------------------------------------------------------
--- UNIQUE(user_id, date, slot) enforces the "one recipe per slot per day"
--- rule at the database level. ON DELETE CASCADE removes meal plan entries
--- automatically when the referenced recipe or user is deleted.
--- NOTE: migration 002 removes the UNIQUE constraint to allow multiple recipes
--- per slot (e.g. a main dish plus sides). The comment is kept here for history.
+-- No UNIQUE constraint on (user_id, date, slot) — multiple recipes per slot
+-- are allowed (e.g. a main dish plus sides). portions multiplies ingredient
+-- quantities on the shopping list.
 CREATE TABLE IF NOT EXISTS meal_plan (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     date      TEXT NOT NULL,
     slot      TEXT NOT NULL CHECK(slot IN ('breakfast', 'lunch', 'dinner')),
     recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
-    UNIQUE(user_id, date, slot)
+    portions  INTEGER NOT NULL DEFAULT 1
 );
 
 -- ---------------------------------------------------------------------------
 -- Cooked log
 -- ---------------------------------------------------------------------------
--- UNIQUE(user_id, date, recipe_id) prevents duplicate cooked entries for
--- the same recipe on the same day.
+-- UNIQUE(user_id, date, recipe_id) makes mark-as-cooked idempotent.
 CREATE TABLE IF NOT EXISTS cooked_log (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
